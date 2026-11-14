@@ -1,0 +1,154 @@
+name: Validate
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: validate-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  changes:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: read
+    outputs:
+      runtime: ${{ github.event_name == 'workflow_dispatch' || steps.filter.outputs.runtime == 'true' }}
+      setup: ${{ github.event_name == 'workflow_dispatch' || steps.filter.outputs.setup == 'true' }}
+      docs: ${{ github.event_name == 'workflow_dispatch' || steps.filter.outputs.docs == 'true' }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: dorny/paths-filter@ceb8a2b8f2d89434be7ff52d3de7ec3738c5cc9d # v4.0.3
+        id: filter
+        with:
+          base: ${{ github.ref }}
+          predicate-quantifier: some-with-excludes
+          filters: |
+            runtime:
+              - 'runtime/**'
+              - '.cargo/**'
+              - '.github/workflows/**'
+            setup:
+              - 'setup/**'
+              - 'package.json'
+              - 'pnpm-*.yaml'
+              - 'biome.json'
+              - '.nvmrc'
+              - '.github/workflows/**'
+            docs:
+              - '**/*.md'
+              - 'LICENSE*'
+              - 'NOTICE*'
+  runtime:
+    needs: changes
+    if: needs.changes.outputs.runtime == 'true'
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Install Linux linker
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y mold
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          workspaces: runtime -> target
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+      - name: Format and lint once
+        if: runner.os == 'Linux'
+        run: |
+          rustup component add clippy rustfmt
+          cargo fmt --manifest-path runtime/Cargo.toml --check
+          cargo clippy --manifest-path runtime/Cargo.toml --locked --all-targets --all-features -- -D warnings
+      - name: Test runtime and documentation
+        run: cargo test --manifest-path runtime/Cargo.toml --locked --all-features
+  setup:
+    needs: changes
+    if: needs.changes.outputs.setup == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
+        with:
+          python-version: "3.12"
+          enable-cache: true
+          save-cache: ${{ github.ref == 'refs/heads/main' }}
+          cache-dependency-glob: setup/uv.lock
+      - uses: pnpm/action-setup@73e46992e05b19abd31f2f3c20e0e7370d762115 # v6.1.1
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
+      - name: Check Python and browser code
+        run: |
+          uv sync --project setup --locked
+          uv run --project setup ruff check
+          uv run --project setup ruff format --check
+          uv run --project setup ty check
+          uv run --project setup pytest
+          pnpm install --frozen-lockfile
+          pnpm check
+      - name: Build universal wheel once and verify installed CLI
+        run: |
+          pnpm build
+          uv build --project setup --out-dir dist
+          uv run --project setup python setup/tools/check-wheel.py dist
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: distributions
+          path: dist/*
+          if-no-files-found: error
+  setup-platforms:
+    needs: [changes, setup]
+    if: needs.changes.outputs.setup == 'true'
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
+        with:
+          python-version: "3.14"
+          enable-cache: true
+          save-cache: ${{ github.ref == 'refs/heads/main' }}
+          cache-dependency-glob: setup/uv.lock
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: distributions
+          path: dist
+      - name: Test Python and the same installed universal wheel
+        run: |
+          uv sync --project setup --locked
+          uv run --project setup pytest
+          uv run --project setup python setup/tools/check-wheel.py dist
+  docs:
+    needs: changes
+    if: needs.changes.outputs.docs == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: lycheeverse/lychee-action@e7477775783ea5526144ba13e8db5eec57747ce8 # v2.9.0
+        with:
+          output: ${{ runner.temp }}/documentation-links.md
+          args: --offline README.md CONTRIBUTING.md runtime/README.md setup/README.md setup/src/so101_setup/COORDINATES.md

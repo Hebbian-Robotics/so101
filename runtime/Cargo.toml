@@ -1,0 +1,39 @@
+[package]
+name = "hebbian-so101"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.92"
+authors = ["Hebbian Robotics"]
+license = "MIT"
+description = "SO-101 servo driver, calibration and USB controller discovery"
+repository = "https://github.com/Hebbian-Robotics/so101"
+readme = "README.md"
+
+[features]
+default = []
+schema = ["dep:schemars"]
+
+[dependencies]
+anyhow = "1.0.104"
+hdrhistogram = { version = "7.6.0", default-features = false }
+rustypot = "1.13.1"
+schemars = { version = "1", optional = true }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+serialport = { version = "4.10.1", default-features = false }
+uuid = { version = "1", features = ["v4"] }
+
+[lints.clippy]
+pedantic = { level = "warn", priority = -1 }
+needless_pass_by_value = "allow"
+unnecessary_wraps = "allow"
+missing_panics_doc = "allow"
+
+[profile.dev]
+debug = "line-tables-only"
+
+[profile.release]
+lto = true
+codegen-units = 1
+strip = true
+panic = "abort"

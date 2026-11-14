@@ -1,0 +1,18 @@
+SO-101 drivers and setup
+Copyright 2026 Hebbian Robotics
+
+Software: MIT; see LICENSE and the package LICENSE files.
+Extracted from Hebbian Robotics' robot control project at commit
+7370f551e49a6fcc6387bbff808a8c28c545885b (the complete source snapshot is retained in the initial extraction).
+
+SO-101 URDF and mesh assets:
+The Robot Studio SO-ARM100, upstream commit
+# SO-101 model assets
+
+From TheRobotStudio/SO-ARM100, commit a758567c3978dfeefe282ede0500085a48fe8f78.
+Apache-2.0; see LICENSE.txt. Meshes are decimated display geometry and URDF mesh
+paths are flattened. Model coordinates require per-arm physical verification.
+
+Their Apache-2.0 license is preserved in
+setup/src/so101_setup/assets/robot/so101/LICENSE.txt.
+Built browser artifacts include THIRD_PARTY_NOTICES.txt for runtime dependencies.

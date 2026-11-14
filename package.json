@@ -1,0 +1,36 @@
+{
+  "name": "@hebbian/so101-model",
+  "version": "0.1.0",
+  "description": "SO-101 model rendering helpers",
+  "type": "module",
+  "license": "MIT",
+  "author": "Hebbian Robotics",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Hebbian-Robotics/so101.git"
+  },
+  "packageManager": "pnpm@12.16.1",
+  "exports": {
+    "./robot-model": "./setup/web/src/robot-model.ts"
+  },
+  "files": [
+    "setup/web/src/robot-model.ts",
+    "LICENSE",
+    "NOTICE"
+  ],
+  "peerDependencies": {
+    "react": "^19.3.1",
+    "three": "^0.187.0",
+    "urdf-loader": "^0.13.1"
+  },
+  "scripts": {
+    "lint": "biome check .",
+    "format": "biome check --write .",
+    "typecheck": "pnpm --dir setup/web typecheck",
+    "check": "pnpm lint && pnpm typecheck",
+    "build": "pnpm --dir setup/web build"
+  },
+  "devDependencies": {
+    "@biomejs/biome": "2.6.6"
+  }
+}

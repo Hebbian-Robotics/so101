@@ -1,0 +1,5 @@
+packages:
+  - setup/web
+# Init-project supply-chain guard; first-party Git pins are reviewed explicitly.
+minimumReleaseAge: 10080
+allowBuilds: {}
