@@ -1,44 +1,88 @@
 # SO-101 drivers and setup
 
-SO-101 hardware access and a local calibration tool, independent of any policy,
-teleoperation system or application stack.
+Connect, calibrate and control SO-101 arms from your own application. Use the
+hardware driver with your policy or teleoperation stack, or run the calibration
+tool on its own. No RUA installation is required.
 
-- **Rust:** `hebbian-so101` provides servo I/O, model-angle feedback, preflight,
-  measured-pose enable, joint/gripper goals and verified recovery.
-- **Python/browser:** `so101-calibrate` discovers controllers, captures calibration
-  and checks model alignment in a read-only 3D view. The tool never powers or
-  moves the arm.
-- **TypeScript:** `@hebbian/so101-model` exports the model helpers used by the UI.
+## Included
 
-## Install the calibration tool
+- Rust hardware driver: servo I/O, joint feedback, preflight, torque control and recovery.
+- Python calibration tool with a browser UI and read-only 3D model.
+- TypeScript model-rendering helpers for React/Three.js viewers.
 
-Download the Python wheel from [Releases](https://github.com/Hebbian-Robotics/so101/releases),
-then install it with `uv tool install ./hebbian_so101_setup-*.whl` and run
-`so101-calibrate`. Python 3.12 or newer is required; the wheel includes the UI
-and licensed robot assets. No Node or Rust toolchain is needed for that install.
-Use `--setup-directory` to choose where per-arm setup files are stored.
+## Calibrate an arm
 
-For source installation and checks, see [CONTRIBUTING.md](CONTRIBUTING.md).
-See the [setup guide](setup/README.md) and [Rust API guide](runtime/README.md)
-for the package interfaces. Consumers can pin this repository's commit in Cargo
-or pnpm; Python wheel dependencies can be pinned by release URL and hash.
+Install [uv](https://docs.astral.sh/uv/getting-started/installation/) and use
+Python 3.12 or newer. Install the released tool and start it:
 
-## Scope and upstream references
+```sh
+uv tool install https://github.com/Hebbian-Robotics/so101/releases/download/v0.1.0/hebbian_so101_setup-0.1.0-py3-none-any.whl
+so101-calibrate
+```
 
-The driver implements hardware operations. Its caller owns motion limits,
-workspace checks, timing and process supervision. Software tests do not validate
-physical calibration or per-arm tuning; see [coordinate conventions and evidence](setup/src/so101_setup/COORDINATES.md).
-Per-arm configs belong in a separate user-owned store; none are shipped here.
+The wheel is hosted on [GitHub Releases](https://github.com/Hebbian-Robotics/so101/releases),
+not PyPI. It includes the browser UI and robot models; you don't need Node,
+a Rust toolchain or a source checkout.
 
-For assembly, motor setup and the official calibration workflow, use the
+Open the local URL printed in the terminal. With the arm supported and torque
+off, connect its USB controller, match the reference pose, record safe joint
+travel and gripper endpoints, then review and save. The tool never powers or
+moves the arm.
+
+Choose a different setup directory when needed:
+
+```sh
+so101-calibrate --setup-directory ./my-arm-setups
+```
+
+Each controller gets its own `arms/<serial>/setup.toml` and LeRobot-compatible
+`calibration.json`. See the [setup guide](setup/README.md) for saved files,
+backups and calibration details.
+
+## Use the Rust driver
+
+In an existing Rust project, add the driver from this release:
+
+```sh
+cargo add hebbian-so101 --git https://github.com/Hebbian-Robotics/so101 --tag v0.1.0
+```
+
+Use `Servos` to open the configured bus, run preflight and read joint angles and
+motor health. Enabling torque and sending joint/gripper goals are explicit
+operations. Start with the [Rust usage example and configuration contract](runtime/README.md#use).
+
+The driver handles hardware operations. Your application owns motion limits,
+workspace checks, timing and process supervision. The Python calibration tool
+is optional when using the driver.
+
+## Use the model helpers
+
+In an existing React/Three.js project:
+
+```sh
+pnpm add '@hebbian/so101-model@github:Hebbian-Robotics/so101#v0.1.0'
+```
+
+Import helpers from `@hebbian/so101-model/robot-model`. For example,
+`useRobotModel` loads `robot/so101/robot.urdf` relative to your page. Serve the
+[URDF and meshes](setup/src/so101_setup/assets/robot/so101) at that path and
+preserve their Apache license. These helpers render the model; use the Rust
+driver or your control stack to communicate with the arm.
+
+## Hardware and development
+
+For assembly and the official setup workflow, follow the
 [LeRobot SO-101 guide](https://huggingface.co/docs/lerobot/so101) and
 [The Robot Studio hardware repository](https://github.com/TheRobotStudio/SO-ARM100).
 Servo transport uses [rustypot](https://docs.rs/rustypot/latest/rustypot/).
-This library's model coordinates and setup contract are documented here; it is
-not the official LeRobot implementation.
+This library's [coordinate conventions](setup/src/so101_setup/COORDINATES.md)
+explain its model alignment; physical calibration and tuning still need checks
+on the particular arm. Per-arm configs are user-owned and aren't shipped here.
+
+See [contributing](CONTRIBUTING.md) to build from source and run checks.
 
 ## License
 
-Software is MIT licensed. Robot URDF/mesh assets retain their Apache-2.0 license;
+Software is [MIT](LICENSE). Robot URDF/mesh assets retain their Apache-2.0 license;
 third-party browser notices accompany built wheels. See [NOTICE](NOTICE) for
-provenance and [LICENSE](LICENSE) for the software license.
+provenance.
