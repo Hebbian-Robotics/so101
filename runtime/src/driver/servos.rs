@@ -387,9 +387,14 @@ impl<B: ServoBus> Servos<B> {
             .map(|gripper| steps_to_radians(blocks[joint_count].position, &gripper.motor));
         feedback.efforts.clear();
         feedback.efforts.extend(
-            blocks[..joint_count]
+            self.config
+                .joints
                 .iter()
-                .map(|block| numeric::register_value(block.load.abs()) / LOAD_UNITS_PER_PERCENT),
+                .zip(&blocks)
+                .map(|(motor, block)| {
+                    f64::from(motor.sign) * numeric::register_value(block.load)
+                        / LOAD_UNITS_PER_PERCENT
+                }),
         );
         let velocities = self
             .velocity_estimator

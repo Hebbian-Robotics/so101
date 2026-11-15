@@ -29,6 +29,7 @@ pub struct EnvironmentConfirmation {
 pub struct Feedback {
     pub positions: Vec<f64>,
     pub velocities: Vec<f64>,
+    /// Each joint's load in percent of rated load, signed in the joint's frame.
     pub efforts: Vec<f64>,
     /// The last temperature reading of each driven motor, the gripper's last;
     /// empty for a plant without thermometers.
