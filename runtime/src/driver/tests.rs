@@ -375,12 +375,15 @@ fn torque_does_not_go_on_when_a_hold_goal_did_not_take() {
 fn feedback_converts_steps_loads_and_the_gripper() {
     let mut bus = FakeBus::healthy();
     bus.set(1, "present_position", 2047 + 512);
+    bus.set(1, "present_load", -250);
     bus.set(2, "present_load", 400);
     bus.set(3, "present_position", 2047);
     let mut arm = servos(bus);
     let feedback = arm.read_feedback().unwrap();
     assert!((feedback.positions[0] - (PI / 4.0 + 0.1)).abs() < 1e-3);
-    assert!((feedback.efforts[1] - 40.0).abs() < 1e-9);
+    // Loads keep their direction, turned into the joint's frame by the motor's sign.
+    assert!((feedback.efforts[0] + 25.0).abs() < 1e-9);
+    assert!((feedback.efforts[1] + 40.0).abs() < 1e-9);
     assert!((feedback.gripper_angle.unwrap() - 0.1).abs() < 1e-9);
     assert!(feedback.fault.is_none());
 }
