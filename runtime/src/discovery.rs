@@ -109,6 +109,16 @@ pub fn match_controllers(
     for (serial, mut ports) in grouped {
         ports.sort();
         ports.dedup();
+        // macOS exposes the same serial device as both a callout and a dial-in
+        // node. Prefer the callout node, but keep other duplicate serials ambiguous.
+        #[cfg(target_os = "macos")]
+        {
+            let callout_ports = ports.clone();
+            ports.retain(|port| {
+                port.strip_prefix("/dev/tty.")
+                    .is_none_or(|suffix| !callout_ports.contains(&format!("/dev/cu.{suffix}")))
+            });
+        }
         let directory = arms_directory.join(serial.as_str());
         if !directory.is_dir() {
             matches.extend(ports.into_iter().map(|port| ControllerMatch::Unregistered {

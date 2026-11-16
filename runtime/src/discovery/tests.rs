@@ -95,3 +95,25 @@ fn unknown_missing_and_unsafe_serials_never_select_a_configuration() {
     assert!(select_controller(&matches, None).is_err());
     assert!(ControllerSerial::parse("").is_err());
 }
+
+#[cfg(target_os = "macos")]
+#[test]
+fn macos_callout_and_dialin_pair_selects_callout_but_real_duplicates_remain_ambiguous() {
+    let fixture = RegistryFixture::new();
+    fixture.register("ARM_A");
+    let pair = [
+        port("/dev/cu.usbmodem123", Some("ARM_A")),
+        port("/dev/tty.usbmodem123", Some("ARM_A")),
+    ];
+    let matches = match_controllers(&pair, &fixture.0).unwrap();
+    assert_eq!(
+        select_controller(&matches, None).unwrap().controller.port,
+        "/dev/cu.usbmodem123"
+    );
+    let distinct = [
+        pair[0].clone(),
+        pair[1].clone(),
+        port("/dev/cu.usbmodem456", Some("ARM_A")),
+    ];
+    assert!(select_controller(&match_controllers(&distinct, &fixture.0).unwrap(), None).is_err());
+}
