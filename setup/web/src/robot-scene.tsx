@@ -12,6 +12,7 @@ import {
 
 type Position = [number, number, number];
 type SceneProps = {
+  modelUrl?: string;
   jointNames: string[];
   measuredJoints: (number | null)[];
   gripperAngleRadians?: number;
@@ -100,7 +101,7 @@ function Models({ template, ...props }: SceneProps & { template: URDFRobot }) {
 }
 
 export function RobotScene(props: SceneProps) {
-  const loaded = useRobotModel();
+  const loaded = useRobotModel(props.modelUrl);
   const [resetCount, setResetCount] = useState(0);
   return (
     <section className="robot-scene" aria-label="Robot visualization">

@@ -405,6 +405,7 @@ class CalibrationSession:
         result = ArmSetup.model_validate(
             {
                 "serial": self.serial,
+                "model_variant": self.setup.model_variant,
                 "alignment": {
                     "joint_signs": draft.signs[:5],
                     "joint_offsets_radians": draft.offsets[:5],

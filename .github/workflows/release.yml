@@ -49,4 +49,20 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         shell: bash
         run: |
-          gh release create "$GITHUB_REF_NAME" dist/* --verify-tag --title "$GITHUB_REF_NAME" --generate-notes
+          if gh release view "$GITHUB_REF_NAME" --json assets > "$RUNNER_TEMP/published-release.json"; then
+            python - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          published = json.loads((Path(os.environ["RUNNER_TEMP"]) / "published-release.json").read_text())
+          expected = {path.name for path in Path("dist").iterdir() if path.is_file() and not path.name.startswith(".")}
+          available = {asset["name"] for asset in published["assets"]}
+          missing = expected - available
+          if missing:
+              raise SystemExit(f"Existing release is missing assets: {sorted(missing)}")
+          print("Release assets already published; preserving their original bytes.")
+          PY
+          else
+            gh release create "$GITHUB_REF_NAME" dist/* --verify-tag --title "$GITHUB_REF_NAME" --generate-notes
+          fi

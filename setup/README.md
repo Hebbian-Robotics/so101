@@ -17,6 +17,12 @@ for their own format; config retrieval and Git operations remain with callers.
 The default store is `$SO101_SETUP_DIRECTORY`, otherwise
 `$XDG_CONFIG_HOME/so101-setup` (defaulting to `~/.config/so101-setup`).
 
+The default `model_variant` is `"stock"`. For the optional TPU gripper and wrist
+camera assembly, set `model_variant = "soft-gripper-camera"` in that arm's
+`setup.toml`. The viewer selects the corresponding model and saving calibration
+preserves the selection. This selects geometry; it does not recalibrate an
+existing arm or establish camera optical calibration.
+
 See [coordinate conventions](src/so101_setup/COORDINATES.md),
 [development/build commands](../CONTRIBUTING.md), and the
 [official LeRobot guide](https://huggingface.co/docs/lerobot/so101).

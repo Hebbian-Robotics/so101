@@ -1,0 +1,18 @@
+Optional soft-gripper and wrist-camera geometry
+
+Derived from xiehuangbao888/soarm_soft_gripper at
+9ea41e73bf16b6171310913c792bd20ebc6245d3:
+https://github.com/xiehuangbao888/soarm_soft_gripper
+
+Source CAD and generation tooling are in models/soft-gripper-camera in the
+SO-101 source repository. The upstream source has no declared license; these
+derived meshes are not covered by the stock model's Apache-2.0 license or this
+package's MIT software license. Redistribution terms remain unspecified.
+
+The camera envelope is 38 x 38 mm across the board and reserves 16.05 mm in
+front of its mounting plane plus 6.2 mm behind for the rear connector. Flexible
+cable geometry is excluded. This is not detailed camera CAD. Its board frame
+has +Z toward the scene and +Y toward the connector
+edge. It is not a calibrated optical frame. The grasp frame is the midpoint
+between the inward surfaces of the distal 1 mm of both unloaded fingers at
+model gripper angle zero. Verify alignment and endpoints on the installed arm.

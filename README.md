@@ -69,6 +69,12 @@ Import helpers from `@hebbian/so101-model/robot-model`. For example,
 preserve their Apache license. These helpers render the model; use the Rust
 driver or your control stack to communicate with the arm.
 
+The optional [TPU gripper and wrist-camera assembly](models/soft-gripper-camera/README.md)
+is bundled as `robot-soft-gripper-camera.urdf`, alongside the stock model. Select
+`model_variant = "soft-gripper-camera"` in calibration configuration and use the
+same URDF in your control application. `useRobotModel(modelUrl)` can load either
+variant. Keep the optional model's separate attribution notice with its meshes.
+
 ## Hardware and development
 
 For assembly and the official setup workflow, follow the

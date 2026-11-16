@@ -16,6 +16,7 @@ SO101_JOINT_NAMES = [
     "wrist_roll",
 ]
 MOTOR_IDS = [1, 2, 3, 4, 5, 6]
+ModelVariant = Literal["stock", "soft-gripper-camera"]
 
 
 class SetupSection(BaseModel):
@@ -61,6 +62,7 @@ class ServoSettings(SetupSection):
 
 class ArmSetup(SetupSection):
     serial: ControllerSerial
+    model_variant: ModelVariant = "stock"
     alignment: ModelAlignment = Field(default_factory=ModelAlignment)
     gripper: GripperEndpoints = Field(default_factory=GripperEndpoints)
     servos: ServoSettings = Field(default_factory=ServoSettings)

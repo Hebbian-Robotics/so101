@@ -1,0 +1,68 @@
+schema_version = 1
+status = "optional model; physical alignment verification and optical calibration required"
+
+[gripper]
+file = "soarm_soft_gripper.stp"
+repository = "https://github.com/xiehuangbao888/soarm_soft_gripper"
+revision = "9ea41e73bf16b6171310913c792bd20ebc6245d3"
+url = "https://raw.githubusercontent.com/xiehuangbao888/soarm_soft_gripper/9ea41e73bf16b6171310913c792bd20ebc6245d3/soarm_soft_gripper.stp"
+sha256 = "2d99e3cab96a6c89b961d022ba6c93c86664fc5baef8b67b7dfc90ab671810de"
+units = "millimeters (STEP SI_UNIT declaration)"
+license_status = "not declared by upstream"
+finger_material = "TPU"
+other_printed_parts_material = "PLA"
+nominal_scale = 1.0
+
+[gripper.printing_instructions]
+file = "UPSTREAM_README.md"
+sha256 = "ec6c4b207fd92b4aef455ee6c767f9f03b1dfa872d38e3239218905f15ff3704"
+
+[camera_mount]
+file = "SO-ARM101_CAMERA_MOUNT-cld-1.stl"
+sha256 = "a695a9feb71b6a4814f792954836a36dcc0783c8644a7741687a368c40ba9eef"
+provenance = "supplied STL; corresponding named part is present in the gripper STEP assembly"
+license_status = "not established"
+units = "millimeters inferred from agreement with the STEP mount dimensions; STL is unitless"
+dimensions_mm = [42.910610, 66.761353, 35.206379]
+
+[camera_mount.assembly_alignment]
+method = "translation aligning STL bounds with the tessellated STEP mount bounds"
+translation_mm = [18.523165, -54.884434, -44.800674]
+rotation_xyzw = [0.0, 0.0, 0.0, 1.0]
+robot_attachment_verified = false
+optical_frame_verified = false
+
+[camera_mount.attachment]
+parent_link = "gripper_link"
+follows_joint = "wrist_roll"
+interface = "locating slot and matching screw holes"
+camera_location = "center of square bracket; optical center and orientation unmeasured"
+
+[camera]
+supplier = "Seeed Studio"
+manufacturer = "HBVCAM / Huiber Vision"
+board_model = "HBVCAM-W20217 V22"
+model = "OV9732 USB camera module"
+sku = "100079619"
+url = "https://www.seeedstudio.com/Camera-Module-OV9732-1MP-100-USB2-0-USB2-0-L38-W38-H16-05mm-p-6982.html"
+datasheet_url = "https://files.seeedstudio.com/Bazaar/product_pdf/100079619.pdf"
+manufacturer_url = "https://www.hbvcamera.com/1MP-%20HD-usb-cameras/hbvcam-ov9732-1mp-hd-free-driver-face-recognition-camera-module.html"
+mounting = "centered in square bracket; screws enter from the back"
+connector_location = "rear of board, on the edge nearest the gripper"
+collision_board_width_mm = 38.0
+collision_front_reserve_mm = 16.05
+collision_rear_reserve_mm = 6.2
+collision_envelope_basis = "supplier module height reserved entirely in front; OEM board drawing rear connector projection reserved behind; flexible cable excluded"
+sensor_resolution_description = "1MP / 720P"
+advertised_diagonal_field_of_view_degrees = 100
+optical_frame_verified = false
+image_rotation_verified = false
+image_mirroring_verified = false
+
+[camera_mount.gripper_interface]
+description = "locating slot plus two coaxial screw pairs in the source assembly"
+screw_axis_direction_in_assembly = [0.000001, -1.0, 0.000001]
+screw_axis_points_mm = [[23.329138, 11.877, -26.827697], [23.400440, 11.877, -34.927383]]
+screw_spacing_mm = 8.1
+gripper_hole_radius_mm = 1.25
+mount_clearance_hole_radius_mm = 1.65

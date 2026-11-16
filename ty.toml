@@ -1,0 +1,3 @@
+[src]
+# CAD generation has isolated PEP 723 dependencies and is checked separately.
+include = ["setup"]

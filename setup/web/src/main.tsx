@@ -12,6 +12,7 @@ const jointSchema = z.object({
   sign: z.union([z.literal(-1), z.literal(1)]),
 });
 const viewSchema = z.object({
+  model_variant: z.enum(["stock", "soft-gripper-camera"]),
   stage: z.enum([
     "disconnected",
     "reference",
@@ -412,6 +413,11 @@ function App() {
         </section>
         <section className="visual-feedback" aria-label="Calibration feedback">
           <RobotScene
+            modelUrl={
+              view?.model_variant === "soft-gripper-camera"
+                ? "robot/so101/robot-soft-gripper-camera.urdf"
+                : "robot/so101/robot.urdf"
+            }
             cameraPosition={calibrationCameraPosition}
             cameraTarget={calibrationCameraTarget}
             jointNames={jointNames}
