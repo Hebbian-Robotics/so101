@@ -17,7 +17,7 @@ from so101_setup.calibration import (
     Saved,
     read_calibration,
 )
-from so101_setup.configuration import ArmSetup, ServoSettings
+from so101_setup.configuration import ArmSetup, ModelVariant, ServoSettings
 from so101_setup.device import RegisterBus
 from so101_setup.storage import NativeSetupStore
 
@@ -61,9 +61,12 @@ class MemoryServoBus(RegisterBus):
         self.closed = True
 
 
-def session_at(tmp_path: Path, bus: MemoryServoBus) -> CalibrationSession:
+def session_at(
+    tmp_path: Path, bus: MemoryServoBus, model_variant: ModelVariant = "stock"
+) -> CalibrationSession:
     setup = ArmSetup(
         serial="ARM_A",
+        model_variant=model_variant,
         servos=ServoSettings(expected_position_gains_by_motor={2: [32, 0, 32], 3: [32, 0, 32]}),
     )
     return CalibrationSession(setup, tmp_path / "arms/ARM_A", tmp_path / "live", bus)
@@ -80,13 +83,15 @@ def record_travel(session: CalibrationSession, bus: MemoryServoBus) -> None:
     session.finish_sweep()
 
 
+@pytest.mark.parametrize("model_variant", ["stock", "soft-gripper-camera"])
 def test_draft_is_read_only_and_save_creates_a_standalone_configuration(
     tmp_path: Path,
+    model_variant: ModelVariant,
 ) -> None:
     bus = MemoryServoBus()
     # A nonzero existing homing must be removed before deriving the new one.
     bus.registers["homing_offset"] = [100] * 6
-    session = session_at(tmp_path, bus)
+    session = session_at(tmp_path, bus, model_variant)
     assert isinstance(session.state, Reference)
     record_travel(session, bus)
     assert isinstance(session.state, Review)
@@ -102,6 +107,7 @@ def test_draft_is_read_only_and_save_creates_a_standalone_configuration(
     assert calibration["wrist_roll"].range_max == 4095
     setup = NativeSetupStore().load(session.directory, "ARM_A")
     assert setup.serial == "ARM_A"
+    assert setup.model_variant == model_variant
     assert setup.gripper.open_position_radians > setup.gripper.closed_position_radians
     assert read_calibration(session.state.calibration) == calibration
     assert (session.state.backup / "registers.json").is_file()

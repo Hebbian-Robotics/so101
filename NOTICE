@@ -16,3 +16,10 @@ paths are flattened. Model coordinates require per-arm physical verification.
 Their Apache-2.0 license is preserved in
 setup/src/so101_setup/assets/robot/so101/LICENSE.txt.
 Built browser artifacts include THIRD_PARTY_NOTICES.txt for runtime dependencies.
+
+Optional soft-gripper and camera-mount reference CAD:
+See models/soft-gripper-camera/README.md and sources.toml for provenance and
+license status. These reference sources are not covered by the software MIT
+license or the stock model's Apache-2.0 license. Raw CAD remains in the source
+repository; the optional derived URDF and meshes are packaged with their own
+SOFT_GRIPPER_NOTICE.txt notice.

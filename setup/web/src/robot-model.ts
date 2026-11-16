@@ -27,8 +27,13 @@ function disposeRobot(robot: URDFRobot): void {
   for (const material of materials) material.dispose();
 }
 
-export function useRobotModel(): LoadedRobot | null {
-  const [loaded, setLoaded] = useState<LoadedRobot | null>(null);
+export function useRobotModel(
+  modelUrl = "robot/so101/robot.urdf",
+): LoadedRobot | null {
+  const [loaded, setLoaded] = useState<{
+    modelUrl: string;
+    result: LoadedRobot;
+  } | null>(null);
   useEffect(() => {
     const manager = new THREE.LoadingManager();
     let robot: URDFRobot | null = null;
@@ -45,18 +50,21 @@ export function useRobotModel(): LoadedRobot | null {
       } else if (failed || !robot) {
         if (robot) disposeRobot(robot);
         setLoaded({
-          robot: null,
-          error:
-            "Could not load the SO-101 model. Joint values remain available.",
+          modelUrl,
+          result: {
+            robot: null,
+            error:
+              "Could not load the SO-101 model. Joint values remain available.",
+          },
         });
       } else {
         for (const joint of Object.values(robot.joints))
           joint.ignoreLimits = true;
-        setLoaded({ robot, error: null });
+        setLoaded({ modelUrl, result: { robot, error: null } });
       }
     };
     new URDFLoader(manager).load(
-      "robot/so101/robot.urdf",
+      modelUrl,
       (loadedRobot) => {
         robot = loadedRobot;
       },
@@ -69,8 +77,8 @@ export function useRobotModel(): LoadedRobot | null {
       cancelled = true;
       if (completed && robot && !failed) disposeRobot(robot);
     };
-  }, []);
-  return loaded;
+  }, [modelUrl]);
+  return loaded?.modelUrl === modelUrl ? loaded.result : null;
 }
 
 function gripperAngle(opening: number): number {

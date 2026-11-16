@@ -23,6 +23,7 @@ from .calibration import (
     JointView,
     Reference,
 )
+from .configuration import ModelVariant
 from .device import RegisterBus
 from .discovery import ControllerChoice, discover_controllers
 from .runtime import asset_directory, setup_directory, setup_lock
@@ -69,6 +70,7 @@ class ApplicationView(BaseModel):
     stage: Literal["disconnected", "reference", "sweep", "review", "saved", "error"]
     controllers: list[ControllerChoice] = Field(default_factory=list)
     serial: str = ""
+    model_variant: ModelVariant = "stock"
     joints: list[JointView] = Field(default_factory=list)
     gripper_closed_recorded: bool = False
     gripper_open_recorded: bool = False
@@ -133,6 +135,7 @@ class CalibrationApplication:
                     )
             assert self.session is not None
             view = ApplicationView.model_validate(self.session.view().model_dump())
+            view.model_variant = self.session.setup.model_variant
             if view.stage == "saved" and self.saved_command is not None:
                 view.command = self.saved_command(view.serial)
             return view
