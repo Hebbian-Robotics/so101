@@ -43,7 +43,7 @@ def main() -> None:
                 "--python",
                 str(python),
                 "--exclude-newer",
-                "7 days",
+                "3 days",
                 str(wheel),
             ],
             check=True,

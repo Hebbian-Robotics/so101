@@ -69,6 +69,10 @@ const fn same_name(first: &str, second: &str) -> bool {
 
 /// A register of the STS3215's control table, looked up while compiling, so the
 /// state block below cannot disagree with the table.
+#[allow(
+    clippy::panic,
+    reason = "Only constant register names call this function; invalid names fail compilation"
+)]
 const fn register(name: &str) -> RegisterInfo {
     let mut index = 0;
     while index < REGISTERS.len() {
@@ -147,6 +151,10 @@ pub struct BusTiming {
 }
 
 impl BusTiming {
+    #[allow(
+        clippy::expect_used,
+        reason = "Fixed positive histogram bounds and three significant digits are valid"
+    )]
     fn new() -> Self {
         Self {
             // Up to ten seconds, to three significant digits.

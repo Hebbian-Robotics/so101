@@ -21,9 +21,18 @@
         "noUnusedFunctionParameters": "error"
       },
       "suspicious": {
-        "noExplicitAny": "warn"
+        "noExplicitAny": "error"
       },
-      "preset": "recommended"
+      "preset": "recommended",
+      "nursery": {
+        "noFloatingPromises": "error",
+        "useExhaustiveSwitchCases": {
+          "level": "error",
+          "options": {
+            "requireExplicitCase": true
+          }
+        }
+      }
     }
   },
   "javascript": {

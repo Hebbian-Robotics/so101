@@ -36,7 +36,9 @@ pnpm check      # Run all checks
 ### Rust
 
 ```bash
-cargo clippy --manifest-path runtime/Cargo.toml --all-targets --all-features  # Linting
+cargo install cargo-machete --version 0.9.2 --locked
+cargo machete --with-metadata --skip-target-dir runtime
+cargo clippy --manifest-path runtime/Cargo.toml --all-targets --all-features -- -D warnings
 cargo fmt --manifest-path runtime/Cargo.toml # Formatting
 ```
 

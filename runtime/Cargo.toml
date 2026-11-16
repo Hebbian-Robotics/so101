@@ -25,6 +25,13 @@ uuid = { version = "1", features = ["v4"] }
 
 [lints.clippy]
 pedantic = { level = "warn", priority = -1 }
+unwrap_used = "warn"
+expect_used = "warn"
+panic = "warn"
+unreachable = "warn"
+needless_pass_by_ref_mut = "warn"
+todo = "deny"
+unimplemented = "deny"
 needless_pass_by_value = "allow"
 unnecessary_wraps = "allow"
 missing_panics_doc = "allow"

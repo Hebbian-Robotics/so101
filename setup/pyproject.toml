@@ -1,6 +1,6 @@
 [project]
 name = "hebbian-so101-setup"
-version = "0.1.1"
+version = "0.1.2"
 description = "SO-101 calibration, model alignment and servo setup without a robot control stack"
 readme = "README.md"
 authors = [{ name = "Hebbian Robotics" }]
@@ -38,19 +38,21 @@ line-length = 100
 target-version = "py312"
 
 [tool.ruff.lint]
-select = ["E", "W", "F", "I", "B", "C4", "UP", "ANN", "PTH", "RET", "SIM", "TID", "RUF"]
+select = ["E", "W", "F", "I", "B", "C4", "UP", "ANN", "PTH", "RET", "SIM", "TID", "RUF", "PLE", "LOG", "PGH003", "PGH004", "PT010", "PT011", "PT012", "PT014", "ASYNC210", "ASYNC220", "ASYNC221", "ASYNC222", "ASYNC230", "ASYNC250", "ASYNC251"]
 ignore = ["E501", "B008", "C901", "RET504", "ANN401"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 
 [tool.uv]
-exclude-newer = "7 days"
+exclude-newer = "3 days"
 
 [tool.ty.rules]
 division-by-zero = "error"
 deprecated = "error"
 unused-ignore-comment = "error"
+invalid-ignore-comment = "error"
+ignore-comment-unknown-rule = "error"
 possibly-unresolved-reference = "error"
 
 [project.urls]

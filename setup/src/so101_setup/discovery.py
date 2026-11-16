@@ -10,6 +10,8 @@ from serial.tools.list_ports import comports
 from .configuration import ControllerSerial
 from .storage import SetupStore
 
+logger = logging.getLogger(__name__)
+
 
 class UsbController(BaseModel):
     serial: ControllerSerial
@@ -29,7 +31,7 @@ def match_controllers(
     matches = []
     for serial, ports in sorted(by_serial.items()):
         if len(ports) != 1:
-            logging.warning("Ignoring ambiguous USB serial %s on ports %s", serial, sorted(ports))
+            logger.warning("Ignoring ambiguous USB serial %s on ports %s", serial, sorted(ports))
             continue
         matches.append(
             ControllerChoice(
@@ -49,5 +51,5 @@ def discover_controllers(directory: Path, store: SetupStore) -> list[ControllerC
         try:
             controllers.append(UsbController(serial=port.serial_number, port=port.device))
         except ValidationError:
-            logging.warning("Ignoring USB port %s with invalid serial identity", port.device)
+            logger.warning("Ignoring USB port %s with invalid serial identity", port.device)
     return match_controllers(controllers, directory, store)
