@@ -10,6 +10,15 @@ Run `cargo test --manifest-path runtime/Cargo.toml` and
 `pnpm build` before `uv build --project setup`; run the installed-wheel check
 with `uv run --project setup python setup/tools/check-wheel.py dist`.
 
+## Release the Python setup package
+
+Update `setup/pyproject.toml` and `setup/uv.lock`, then push a matching version
+tag, for example `git tag v0.1.1` and `git push origin v0.1.1`. The release
+workflow builds and verifies the wheel and source archive before attaching
+them to a GitHub Release. This does not publish to PyPI. A manual workflow run
+on a branch validates and retains build artifacts without publishing a release.
+Reruns preserve existing release assets, since applications pin their checksums.
+
 ## Code Quality
 
 ```bash
