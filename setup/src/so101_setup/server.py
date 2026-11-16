@@ -8,9 +8,12 @@ import os
 import secrets
 import threading
 from collections.abc import Callable
+from functools import partial
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+from socket import socket
+from socketserver import BaseServer
 from typing import Annotated, Literal
 from urllib.parse import unquote, urlsplit
 
@@ -187,85 +190,106 @@ def calibration_root() -> Path:
     return hugging_face / "lerobot/calibration"
 
 
-def request_handler(
-    application: CalibrationApplication, asset_directory: Path, token: str
-) -> type[BaseHTTPRequestHandler]:
-    class Handler(BaseHTTPRequestHandler):
-        def setup(self) -> None:
-            super().setup()
-            self.connection.settimeout(5)
+class CalibrationRequestHandler(BaseHTTPRequestHandler):
+    def __init__(
+        self,
+        request: socket,
+        client_address: tuple[str, int],
+        server: BaseServer,
+        *,
+        application: CalibrationApplication,
+        asset_directory: Path,
+        token: str,
+    ) -> None:
+        self.application = application
+        self.asset_directory = asset_directory
+        self.token = token
+        super().__init__(request, client_address, server)
 
-        def reply(
-            self,
-            status: HTTPStatus,
-            content: bytes,
-            content_type: str = "application/json",
-        ) -> None:
-            self.send_response(status)
-            self.send_header("Content-Type", content_type)
-            self.send_header("Content-Length", str(len(content)))
-            self.send_header("Cache-Control", "no-store")
-            self.send_header("X-Content-Type-Options", "nosniff")
-            self.send_header(
-                "Content-Security-Policy",
-                "default-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:",
-            )
-            self.end_headers()
-            self.wfile.write(content)
+    def setup(self) -> None:
+        super().setup()
+        self.connection.settimeout(5)
 
-        def authenticated(self) -> bool:
-            provided = self.headers.get("Authorization", "")
-            return secrets.compare_digest(provided, f"Bearer {token}")
+    def reply(
+        self,
+        status: HTTPStatus,
+        content: bytes,
+        content_type: str = "application/json",
+    ) -> None:
+        self.send_response(status)
+        self.send_header("Content-Type", content_type)
+        self.send_header("Content-Length", str(len(content)))
+        self.send_header("Cache-Control", "no-store")
+        self.send_header("X-Content-Type-Options", "nosniff")
+        self.send_header(
+            "Content-Security-Policy",
+            "default-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:",
+        )
+        self.end_headers()
+        self.wfile.write(content)
 
-        def do_GET(self) -> None:
-            path = urlsplit(self.path).path
-            if path == "/api/state":
-                if not self.authenticated():
-                    self.reply(
-                        HTTPStatus.UNAUTHORIZED,
-                        b'{"message":"Open the URL printed by the calibration command."}',
-                    )
-                    return
-                try:
-                    self.reply(HTTPStatus.OK, application.view().model_dump_json().encode())
-                except Exception as error:
-                    self.reply(
-                        HTTPStatus.SERVICE_UNAVAILABLE,
-                        json.dumps({"message": str(error)}).encode(),
-                    )
-                return
-            requested = (asset_directory / unquote(path).lstrip("/")).resolve()
-            if path == "/":
-                requested = asset_directory / "index.html"
-            if not requested.is_relative_to(asset_directory) or not requested.is_file():
-                self.reply(HTTPStatus.NOT_FOUND, b"Not found", "text/plain")
-                return
-            self.reply(
-                HTTPStatus.OK,
-                requested.read_bytes(),
-                mimetypes.guess_type(requested.name)[0] or "application/octet-stream",
-            )
+    def authenticated(self) -> bool:
+        provided = self.headers.get("Authorization", "")
+        return secrets.compare_digest(provided, f"Bearer {self.token}")
 
-        def do_POST(self) -> None:
-            if urlsplit(self.path).path != "/api/action":
-                self.reply(HTTPStatus.NOT_FOUND, b"{}")
-                return
+    def do_GET(self) -> None:
+        path = urlsplit(self.path).path
+        if path == "/api/state":
             if not self.authenticated():
-                self.reply(HTTPStatus.UNAUTHORIZED, b"{}")
+                self.reply(
+                    HTTPStatus.UNAUTHORIZED,
+                    b'{"message":"Open the URL printed by the calibration command."}',
+                )
                 return
             try:
-                length = int(self.headers.get("Content-Length", "0"))
-                if not 0 < length <= 4096:
-                    raise ValueError("Action body must be 1-4096 bytes")
-                action = ACTION_ADAPTER.validate_json(self.rfile.read(length))
-                self.reply(HTTPStatus.OK, application.act(action).model_dump_json().encode())
+                self.reply(HTTPStatus.OK, self.application.view().model_dump_json().encode())
             except Exception as error:
-                self.reply(HTTPStatus.BAD_REQUEST, json.dumps({"message": str(error)}).encode())
+                self.reply(
+                    HTTPStatus.SERVICE_UNAVAILABLE,
+                    json.dumps({"message": str(error)}).encode(),
+                )
+            return
+        requested = (self.asset_directory / unquote(path).lstrip("/")).resolve()
+        if path == "/":
+            requested = self.asset_directory / "index.html"
+        if not requested.is_relative_to(self.asset_directory) or not requested.is_file():
+            self.reply(HTTPStatus.NOT_FOUND, b"Not found", "text/plain")
+            return
+        self.reply(
+            HTTPStatus.OK,
+            requested.read_bytes(),
+            mimetypes.guess_type(requested.name)[0] or "application/octet-stream",
+        )
 
-        def log_message(self, format: str, *args: object) -> None:
-            pass
+    def do_POST(self) -> None:
+        if urlsplit(self.path).path != "/api/action":
+            self.reply(HTTPStatus.NOT_FOUND, b"{}")
+            return
+        if not self.authenticated():
+            self.reply(HTTPStatus.UNAUTHORIZED, b"{}")
+            return
+        try:
+            length = int(self.headers.get("Content-Length", "0"))
+            if not 0 < length <= 4096:
+                raise ValueError("Action body must be 1-4096 bytes")
+            action = ACTION_ADAPTER.validate_json(self.rfile.read(length))
+            self.reply(HTTPStatus.OK, self.application.act(action).model_dump_json().encode())
+        except Exception as error:
+            self.reply(HTTPStatus.BAD_REQUEST, json.dumps({"message": str(error)}).encode())
 
-    return Handler
+    def log_message(self, format: str, *args: object) -> None:
+        pass
+
+
+def request_handler(
+    application: CalibrationApplication, asset_directory: Path, token: str
+) -> Callable[[socket, tuple[str, int], BaseServer], CalibrationRequestHandler]:
+    return partial(
+        CalibrationRequestHandler,
+        application=application,
+        asset_directory=asset_directory,
+        token=token,
+    )
 
 
 class CalibrationHTTPServer(ThreadingHTTPServer):
