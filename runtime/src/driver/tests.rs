@@ -203,6 +203,90 @@ fn servos(bus: FakeBus) -> Servos<FakeBus> {
 }
 
 #[test]
+fn malformed_runtime_configuration_is_refused_before_constructing_servos() {
+    type ConfigurationMutation = fn(&mut FeetechConfig);
+    let invalid_configurations: &[(&str, ConfigurationMutation)] = &[
+        ("nonfinite offset", |config| {
+            config.joints[0].offset_radians = f64::NAN;
+        }),
+        ("nonfinite minimum voltage", |config| {
+            config.min_voltage_volts = f64::NAN;
+        }),
+        ("nonfinite maximum voltage", |config| {
+            config.max_voltage_volts = f64::INFINITY;
+        }),
+        ("nonfinite temperature", |config| {
+            config.max_temperature_celsius = f64::NAN;
+        }),
+        ("negative temperature", |config| {
+            config.max_temperature_celsius = -1.0;
+        }),
+        ("negative voltage", |config| config.min_voltage_volts = -1.0),
+        ("empty joints", |config| config.joints.clear()),
+        ("duplicate joint IDs", |config| {
+            config.joints[1].id = config.joints[0].id;
+        }),
+        ("passive driven overlap", |config| {
+            config.passive_motor_ids.push(1);
+        }),
+        ("duplicate passive IDs", |config| {
+            config.passive_motor_ids = vec![4, 4];
+        }),
+        ("broadcast motor ID", |config| config.joints[0].id = 254),
+        ("oversized encoder range", |config| {
+            config.joints[0].calibration.range_max = 4096;
+        }),
+        ("invalid return delay", |config| {
+            config.expected_return_delay_time = Some(256);
+        }),
+        ("nonfinite gripper force", |config| {
+            config.gripper.as_mut().unwrap().force_fraction = f64::NAN;
+        }),
+        ("oversized gripper force", |config| {
+            config.gripper.as_mut().unwrap().force_fraction = 1.01;
+        }),
+        ("zero gripper force", |config| {
+            config.gripper.as_mut().unwrap().force_fraction = 0.0;
+        }),
+    ];
+    for (case_name, invalidate) in invalid_configurations {
+        let mut invalid = config();
+        invalidate(&mut invalid);
+        assert!(
+            Servos::new(FakeBus::healthy(), invalid).is_err(),
+            "{case_name}"
+        );
+    }
+}
+
+#[test]
+fn malformed_joint_goals_are_refused_without_changing_motor_goals() {
+    for positions in [
+        vec![],
+        vec![0.0],
+        vec![0.0, 0.0, 0.0],
+        vec![f64::NAN, 0.0],
+        vec![0.0, f64::INFINITY],
+        vec![0.0, 1e300],
+    ] {
+        let mut arm = servos(FakeBus::healthy());
+        assert!(arm.command(&positions).is_err(), "{positions:?}");
+        for motor_id in [1, 2] {
+            assert_eq!(arm.bus.registers[&(motor_id, "goal_position".into())], 0);
+        }
+    }
+}
+
+#[test]
+fn malformed_gripper_goals_are_refused_without_changing_the_motor_goal() {
+    for angle in [f64::NAN, f64::INFINITY, f64::NEG_INFINITY, 1e300] {
+        let mut arm = servos(FakeBus::healthy());
+        assert!(arm.command_gripper(angle).is_err(), "{angle}");
+        assert_eq!(arm.bus.registers[&(3, "goal_position".into())], 0);
+    }
+}
+
+#[test]
 fn a_joint_angle_survives_the_trip_to_encoder_steps_and_back() {
     for sign in [1, -1] {
         let joint = motor(1, sign);

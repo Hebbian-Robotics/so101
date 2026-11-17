@@ -67,5 +67,27 @@
         "organizeImports": "on"
       }
     }
-  }
+  },
+  "overrides": [
+    {
+      "includes": ["setup/web/src/robot-model.ts"],
+      "linter": {
+        "rules": {
+          "style": {
+            "noRestrictedImports": {
+              "level": "error",
+              "options": {
+                "patterns": [
+                  {
+                    "group": ["**", "!react", "!three", "!urdf-loader"],
+                    "message": "The exported robot model must stay independent of the calibration application."
+                  }
+                ]
+              }
+            }
+          }
+        }
+      }
+    }
+  ]
 }

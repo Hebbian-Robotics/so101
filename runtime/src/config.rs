@@ -1,6 +1,6 @@
 //! Per-arm hardware configuration, independent of station policy.
 
-use crate::calibration::{LerobotMotorCalibration, load_calibration};
+use crate::calibration::{LerobotMotorCalibration, STS3215_RESOLUTION, load_calibration};
 use crate::settings::{FeetechSettings, Sign};
 use anyhow::Context;
 use serde::{Deserialize, Serialize};
@@ -152,22 +152,91 @@ impl FeetechConfig {
     /// # Errors
     /// A sign, range or supply interval cannot describe a usable motor mapping.
     pub fn validate(&self) -> anyhow::Result<()> {
-        if self.min_voltage_volts >= self.max_voltage_volts {
-            anyhow::bail!("The Feetech voltage range is empty");
+        anyhow::ensure!(!self.port.trim().is_empty(), "The Feetech port is empty");
+        anyhow::ensure!(!self.joints.is_empty(), "The arm has no joint motors");
+        anyhow::ensure!(
+            [
+                self.min_voltage_volts,
+                self.max_voltage_volts,
+                self.max_temperature_celsius
+            ]
+            .iter()
+            .all(|value| value.is_finite() && *value > 0.0),
+            "Feetech temperature and voltage limits must be positive and finite"
+        );
+        anyhow::ensure!(
+            self.min_voltage_volts < self.max_voltage_volts,
+            "The Feetech voltage range is empty"
+        );
+        anyhow::ensure!(
+            self.expected_return_delay_time
+                .is_none_or(|delay| (0..=255).contains(&delay)),
+            "The return delay must fit the servo register"
+        );
+        if let Some(gripper) = &self.gripper {
+            anyhow::ensure!(
+                gripper.force_fraction.is_finite()
+                    && gripper.force_fraction > 0.0
+                    && gripper.force_fraction <= 1.0,
+                "Gripper force fraction must be finite and in (0, 1]"
+            );
         }
-        let motors = self
+        let mut motor_ids = std::collections::BTreeSet::new();
+        for motor_id in self
             .joints
             .iter()
-            .chain(self.gripper.iter().map(|gripper| &gripper.motor));
-        for motor in motors {
+            .map(|motor| motor.id)
+            .chain(self.gripper.iter().map(|gripper| gripper.motor.id))
+            .chain(self.passive_motor_ids.iter().copied())
+        {
+            anyhow::ensure!(
+                motor_id < 254 && motor_ids.insert(motor_id),
+                "Motor ID {motor_id} is reserved or repeated"
+            );
+        }
+        for motor in self
+            .joints
+            .iter()
+            .chain(self.gripper.iter().map(|gripper| &gripper.motor))
+        {
             let calibration = &motor.calibration;
-            if !(0 <= calibration.range_min && calibration.range_min < calibration.range_max) {
-                anyhow::bail!("Motor {} has an invalid calibrated range", motor.id);
-            }
-            if motor.sign != 1 && motor.sign != -1 {
-                anyhow::bail!("Motor {} sign must be 1 or -1", motor.id);
-            }
+            anyhow::ensure!(
+                0 <= calibration.range_min
+                    && calibration.range_min < calibration.range_max
+                    && calibration.range_max < STS3215_RESOLUTION,
+                "Motor {} has an invalid calibrated range",
+                motor.id
+            );
+            anyhow::ensure!(
+                motor.sign == 1 || motor.sign == -1,
+                "Motor {} sign must be 1 or -1",
+                motor.id
+            );
+            anyhow::ensure!(
+                motor.offset_radians.is_finite(),
+                "Motor {} offset must be finite",
+                motor.id
+            );
         }
         Ok(())
+    }
+}
+
+pub(crate) struct ValidatedFeetechConfig(FeetechConfig);
+
+impl TryFrom<FeetechConfig> for ValidatedFeetechConfig {
+    type Error = anyhow::Error;
+
+    fn try_from(config: FeetechConfig) -> anyhow::Result<Self> {
+        config.validate()?;
+        Ok(Self(config))
+    }
+}
+
+impl std::ops::Deref for ValidatedFeetechConfig {
+    type Target = FeetechConfig;
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
     }
 }

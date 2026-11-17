@@ -31,7 +31,12 @@ source-include = [
 ]
 
 [dependency-groups]
-dev = ["pytest>=9.2.0", "ruff", "ty"]
+dev = [
+    "import-linter>=2.15",
+    "pytest>=9.2.0",
+    "ruff",
+    "ty",
+]
 
 [tool.ruff]
 line-length = 100
@@ -61,3 +66,17 @@ possibly-unresolved-reference = "error"
 [project.urls]
 Repository = "https://github.com/Hebbian-Robotics/so101"
 Documentation = "https://github.com/Hebbian-Robotics/so101#readme"
+
+[tool.importlinter]
+root_package = "so101_setup"
+include_external_packages = true
+
+[[tool.importlinter.contracts]]
+name = "setup configuration is independent of hardware and application adapters"
+type = "forbidden"
+source_modules = ["so101_setup.configuration"]
+forbidden_modules = [
+    "so101_setup.calibration", "so101_setup.device", "so101_setup.storage",
+    "so101_setup.runtime", "so101_setup.server", "so101_setup.discovery",
+    "rustypot", "serial", "filelock", "http", "socket", "subprocess",
+]

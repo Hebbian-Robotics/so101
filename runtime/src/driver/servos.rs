@@ -5,7 +5,8 @@ use std::time::{Duration, Instant};
 use anyhow::{Context, bail, ensure};
 use rustypot::servo::feetech::sts3215::DEFINITION;
 
-use crate::config::{FeetechConfig, FeetechMotor};
+use crate::calibration::STS3215_RESOLUTION;
+use crate::config::{FeetechConfig, FeetechMotor, ValidatedFeetechConfig};
 use crate::numeric;
 use crate::telemetry::{EnvironmentConfirmation, Feedback, Reconnection};
 
@@ -27,6 +28,21 @@ const ENVIRONMENT_CONFIRMATION_SAMPLES: u8 = 3;
 const SEVERE_TEMPERATURE_MARGIN_CELSIUS: f64 = 5.0;
 const SEVERE_VOLTAGE_MARGIN_VOLTS: f64 = 1.0;
 
+fn checked_goal(radians: f64, motor: &FeetechMotor) -> anyhow::Result<i64> {
+    ensure!(
+        radians.is_finite(),
+        "Motor {} goal must be finite",
+        motor.id
+    );
+    let goal = radians_to_steps(radians, motor);
+    ensure!(
+        (0..STS3215_RESOLUTION).contains(&goal),
+        "Motor {} goal exceeds the encoder range",
+        motor.id
+    );
+    Ok(goal)
+}
+
 #[derive(Default)]
 struct EnvironmentReadings {
     high_temperature: u8,
@@ -45,7 +61,7 @@ fn confirmed_excursion(counter: &mut u8, outside: bool, severe: bool) -> bool {
 
 pub struct Servos<B: ServoBus> {
     pub(super) bus: B,
-    config: FeetechConfig,
+    config: ValidatedFeetechConfig,
     position_mode: i64,
     arm_ids: Vec<u8>,
     driven_ids: Vec<u8>,
@@ -64,12 +80,12 @@ impl Servos<SerialBus> {
     /// # Errors
     /// The configuration is invalid or the port cannot be opened.
     pub fn open(config: FeetechConfig) -> anyhow::Result<Self> {
-        config.validate()?;
+        let config = ValidatedFeetechConfig::try_from(config)?;
         let mut ids: Vec<u8> = config.joints.iter().map(|motor| motor.id).collect();
         ids.extend(config.gripper.iter().map(|gripper| gripper.motor.id));
         ids.extend(&config.passive_motor_ids);
         let bus = SerialBus::open(&config.port, &ids)?;
-        Self::new(bus, config)
+        Self::from_validated(bus, config)
     }
 }
 
@@ -77,7 +93,10 @@ impl<B: ServoBus> Servos<B> {
     /// # Errors
     /// The configuration is invalid or the servo definition has no position mode.
     pub fn new(bus: B, config: FeetechConfig) -> anyhow::Result<Self> {
-        config.validate()?;
+        Self::from_validated(bus, ValidatedFeetechConfig::try_from(config)?)
+    }
+
+    fn from_validated(bus: B, config: ValidatedFeetechConfig) -> anyhow::Result<Self> {
         let position_mode = DEFINITION
             .info
             .operating_modes
@@ -581,13 +600,16 @@ impl<B: ServoBus> Servos<B> {
     pub fn command(&mut self, positions: &[f64]) -> anyhow::Result<()> {
         // Position mode has no per-command speed cap. The caller must bound
         // speed, acceleration and jerk before sending goals.
-        self.goal_steps.clear();
-        self.goal_steps.extend(
-            positions
-                .iter()
-                .zip(&self.config.joints)
-                .map(|(radians, motor)| radians_to_steps(*radians, motor)),
+        ensure!(
+            positions.len() == self.arm_ids.len(),
+            "Expected {} joint goals, got {}",
+            self.arm_ids.len(),
+            positions.len()
         );
+        self.goal_steps.clear();
+        for (radians, motor) in positions.iter().zip(&self.config.joints) {
+            self.goal_steps.push(checked_goal(*radians, motor)?);
+        }
         self.bus
             .write(&self.arm_ids, "goal_position", &self.goal_steps)
     }
@@ -602,7 +624,7 @@ impl<B: ServoBus> Servos<B> {
             .gripper
             .as_ref()
             .context("This arm has no gripper")?;
-        let goal = radians_to_steps(angle, &gripper.motor);
+        let goal = checked_goal(angle, &gripper.motor)?;
         self.bus
             .write(&[gripper.motor.id], "goal_position", &[goal])
     }
