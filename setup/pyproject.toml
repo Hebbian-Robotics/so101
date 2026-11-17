@@ -1,6 +1,6 @@
 [project]
 name = "hebbian-so101-setup"
-version = "0.1.4"
+version = "0.1.5"
 description = "SO-101 calibration, model alignment and servo setup without a robot control stack"
 readme = "README.md"
 authors = [{ name = "Hebbian Robotics" }]
