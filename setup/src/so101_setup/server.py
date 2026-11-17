@@ -381,10 +381,20 @@ def serve_application(
 def command_line() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--setup-directory", type=Path, default=setup_directory())
+    parser.add_argument(
+        "--model-variant",
+        choices=("stock", "soft-gripper-camera"),
+        default="stock",
+        help="Model for new arm entries; existing setup files keep their model.",
+    )
     parser.add_argument("--assets", type=Path, default=asset_directory())
     parser.add_argument("--port", type=int, default=8795)
     arguments = parser.parse_args()
-    application = CalibrationApplication(arguments.setup_directory, calibration_root())
+    application = CalibrationApplication(
+        arguments.setup_directory,
+        calibration_root(),
+        NativeSetupStore(arguments.model_variant),
+    )
     serve_application(application, arguments.assets, arguments.port, setup_lock())
 
 
