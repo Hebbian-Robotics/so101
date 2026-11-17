@@ -1,6 +1,15 @@
 # Calibration and setup
 
-Run `so101-calibrate` and open the local URL it prints. A single connected USB
+From a source checkout, install Node 24, pnpm 12, Python 3.12 or newer and uv,
+then build the browser assets and start the tool:
+
+```sh
+pnpm install --frozen-lockfile
+pnpm build
+uv run --project setup so101-calibrate
+```
+
+Open the local URL it prints. A single connected USB
 controller is selected automatically; choose one if several are connected.
 For the soft-gripper-and-camera assembly, support the disabled arm in the shown
 resting pose with the gripper closed, then start recording and gently sweep

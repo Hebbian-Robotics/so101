@@ -16,7 +16,7 @@ Install [uv](https://docs.astral.sh/uv/getting-started/installation/) and use
 Python 3.12 or newer. Install the released tool and start it:
 
 ```sh
-uv tool install https://github.com/Hebbian-Robotics/so101/releases/download/v0.1.0/hebbian_so101_setup-0.1.0-py3-none-any.whl
+uv tool install https://github.com/Hebbian-Robotics/so101/releases/download/v0.1.4/hebbian_so101_setup-0.1.4-py3-none-any.whl
 so101-calibrate
 ```
 
@@ -34,6 +34,9 @@ Choose a different setup directory when needed:
 ```sh
 so101-calibrate --setup-directory ./my-arm-setups
 ```
+
+For the latest source version, including model selection for a new arm, follow
+the [source setup instructions](setup/README.md).
 
 Each controller gets its own `arms/<serial>/setup.toml` and LeRobot-compatible
 `calibration.json`. See the [setup guide](setup/README.md) for saved files,
