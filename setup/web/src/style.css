@@ -54,6 +54,30 @@ main {
   width: 30px;
   height: 30px;
 }
+.github-link {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  min-width: 40px;
+  min-height: 40px;
+  padding: 0 10px;
+  margin-left: auto;
+  border-radius: 5px;
+  color: var(--link);
+  text-decoration: none;
+}
+.github-link:hover {
+  background: var(--hover);
+}
+.github-link:focus-visible {
+  outline: 3px solid var(--focus);
+  outline-offset: 3px;
+}
+.github-link svg {
+  width: 20px;
+  height: 20px;
+}
 h1 {
   font-size: 30px;
   font-weight: 600;
