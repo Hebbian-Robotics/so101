@@ -20,6 +20,10 @@ model before saving. The home pose is an estimate,
 so compare multiple positions. The stock-gripper variant uses its reference
 pose and explicit gripper endpoints.
 
+The server reads motor positions and streams updates to the browser. Streaming
+does not increase the motor sampling rate; move slowly and pause at endpoints
+so the tool can record the full range.
+
 Draft capture and range recording change no registers. Save backs up the prior
 files/registers, writes and verifies calibration/settings with torque off, then
 releases the port. If save fails, reconcile the recorded backup before control.
