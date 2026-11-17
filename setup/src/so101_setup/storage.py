@@ -6,7 +6,7 @@ from typing import Protocol
 
 import tomli_w
 
-from .configuration import ArmSetup
+from .configuration import ArmSetup, ModelVariant
 
 
 class SetupStore(Protocol):
@@ -18,6 +18,9 @@ class SetupStore(Protocol):
 class NativeSetupStore:
     """One setup.toml and LeRobot calibration.json per controller directory."""
 
+    def __init__(self, default_model_variant: ModelVariant = "stock") -> None:
+        self.default_model_variant = default_model_variant
+
     def configuration_path(self, directory: Path) -> Path:
         return directory / "setup.toml"
 
@@ -28,7 +31,7 @@ class NativeSetupStore:
                 raise ValueError(
                     "This directory contains a host profile. Use its setup adapter or select a new standalone setup directory."
                 )
-            return ArmSetup(serial=serial)
+            return ArmSetup(serial=serial, model_variant=self.default_model_variant)
         setup = ArmSetup.model_validate(tomllib.loads(path.read_text()))
         if setup.serial != serial:
             raise ValueError(f"Setup serial {setup.serial} does not match USB controller {serial}")

@@ -9,6 +9,7 @@ pub mod driver;
 mod numeric;
 pub mod registry;
 pub mod settings;
+pub mod setup;
 pub mod telemetry;
 
 /// Standard SO-101 arm joint order, excluding the gripper.
