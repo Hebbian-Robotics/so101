@@ -12,12 +12,14 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Literal
+from xml.etree import ElementTree
 
 from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, model_validator
 
 from .configuration import MOTOR_IDS, SO101_JOINT_NAMES, ArmSetup
 from .device import RegisterBus, apply_position_gains
 from .storage import NativeSetupStore, SetupStore
+from .sweep_estimation import EncoderSweep, estimate_sweep
 
 MOTOR_NAMES = (*SO101_JOINT_NAMES, "gripper")
 RESOLUTION = 4096
@@ -83,6 +85,7 @@ class DraftCalibration:
     maximums: list[int]
     signs: list[int]
     offsets: list[float]
+    use_swept_wrist_limits: bool = False
     previous_steps: list[int] = field(init=False)
 
     def __post_init__(self) -> None:
@@ -117,8 +120,12 @@ class DraftCalibration:
             name: MotorCalibration(
                 id=motor_id,
                 homing_offset=self.homing_offsets[index],
-                range_min=0 if name == "wrist_roll" else self.minimums[index],
-                range_max=4095 if name == "wrist_roll" else self.maximums[index],
+                range_min=0
+                if name == "wrist_roll" and not self.use_swept_wrist_limits
+                else self.minimums[index],
+                range_max=4095
+                if name == "wrist_roll" and not self.use_swept_wrist_limits
+                else self.maximums[index],
             )
             for index, (name, motor_id) in enumerate(zip(MOTOR_NAMES, MOTOR_IDS, strict=True))
         }
@@ -137,9 +144,16 @@ class Recording:
 
 
 @dataclass
+class SweepRecording:
+    sweeps: list[EncoderSweep]
+    signs: list[int]
+
+
+@dataclass
 class Review:
     draft: DraftCalibration
     gripper_endpoints: tuple[float, float]
+    estimated: bool = False
 
 
 @dataclass(frozen=True)
@@ -154,7 +168,7 @@ class Failed:
     message: str
 
 
-CalibrationState = Reference | Recording | Review | Saved | Failed
+CalibrationState = Reference | Recording | SweepRecording | Review | Saved | Failed
 
 
 class JointView(BaseModel):
@@ -172,6 +186,8 @@ class CalibrationView(BaseModel):
     gripper_opening: float
     gripper_closed_recorded: bool = False
     gripper_open_recorded: bool = False
+    estimated: bool = False
+    sweep_only: bool = False
     message: str = ""
     command: str = ""
 
@@ -243,6 +259,7 @@ class CalibrationSession:
                 reference_steps=[HOMING_STEPS] * 6,
                 minimums=minimums,
                 maximums=maximums,
+                use_swept_wrist_limits=True,
                 signs=[*settings.joint_signs, settings.gripper_sign],
                 offsets=[
                     *settings.joint_offsets_radians,
@@ -262,6 +279,58 @@ class CalibrationSession:
         if len(positions) != 6 or any(not 0 <= position < RESOLUTION for position in positions):
             raise RuntimeError("Expected six valid SO-101 encoder readings")
         return positions
+
+    def start_sweep(self) -> None:
+        """Start a read-only sweep without requiring a reference pose."""
+        if isinstance(self.state, (Saved, Failed)):
+            raise ValueError("Reconnect before creating a new draft")
+        if self.setup.model_variant != "soft-gripper-camera":
+            raise ValueError("Sweep-only calibration is not yet available for the stock gripper")
+        positions = self.read_positions()
+        signs: list[int] = [*self.setup.alignment.joint_signs, self.setup.alignment.gripper_sign]
+        self.state = SweepRecording([EncoderSweep.start(position) for position in positions], signs)
+
+    def _finish_sweep_estimate(self) -> None:
+        if not isinstance(self.state, SweepRecording):
+            raise ValueError("Start a sweep before estimating calibration")
+        self.view()
+        recording = self.state
+        model = Path(__file__).parent / "assets/robot/so101/robot-soft-gripper-camera.urdf"
+        root = ElementTree.parse(model).getroot()
+        centers: list[float] = []
+        for name in SO101_JOINT_NAMES:
+            limit = root.find(f"joint[@name='{name}']/limit")
+            if limit is None:
+                raise ValueError(f"Model is missing limits for {name}")
+            centers.append((float(limit.attrib["lower"]) + float(limit.attrib["upper"])) / 2)
+        # Convex fingertip meshes first contact at this angle in the bundled
+        # soft-gripper CAD. The operator verifies the resulting visual alignment.
+        closed_angle = -0.12105
+        gripper_span = min(
+            recording.sweeps[5].maximum - recording.sweeps[5].minimum, RESOLUTION - 1
+        )
+        centers.append(closed_angle + gripper_span * math.tau / RESOLUTION / 2)
+        estimates = [
+            estimate_sweep(sweep, old_homing, sign, center)
+            for sweep, old_homing, sign, center in zip(
+                recording.sweeps, self.original_homing, recording.signs, centers, strict=True
+            )
+        ]
+        draft = DraftCalibration(
+            [estimate.homing_offset for estimate in estimates],
+            [(estimate.range_min + estimate.range_max) // 2 for estimate in estimates],
+            [estimate.range_min for estimate in estimates],
+            [estimate.range_max for estimate in estimates],
+            list(recording.signs),
+            [estimate.model_offset_radians for estimate in estimates],
+            use_swept_wrist_limits=True,
+        )
+        draft.entries()
+        self.state = Review(
+            draft,
+            (closed_angle, closed_angle + gripper_span * math.tau / RESOLUTION),
+            estimated=True,
+        )
 
     def capture_reference(self) -> None:
         if isinstance(self.state, (Saved, Failed)):
@@ -299,14 +368,33 @@ class CalibrationSession:
         )
 
     def reverse_joint(self, index: int) -> None:
-        if not isinstance(self.state, Recording) or not 0 <= index < 6:
-            raise ValueError("Directions can be changed only while recording a new calibration")
+        if not 0 <= index < 6:
+            raise ValueError("Unknown joint")
+        if isinstance(self.state, Review):
+            draft = self.state.draft
+            center = draft.reference_steps[index]
+            reference_angle = joint_radians(center, draft.signs[index], draft.offsets[index])
+            draft.signs[index] *= -1
+            draft.offsets[index] = reference_angle - joint_radians(center, draft.signs[index], 0.0)
+            return
+        if not isinstance(self.state, Recording):
+            raise ValueError("Directions can be changed only while calibrating")
         draft = self.state.draft
         target = REFERENCE_JOINTS[index] if index < 5 else REFERENCE_GRIPPER_RADIANS
         draft.signs[index] *= -1
         draft.offsets[index] = target - joint_radians(
             draft.reference_steps[index], draft.signs[index], 0.0
         )
+
+    def adjust_joint(self, index: int, delta_radians: float) -> None:
+        if not isinstance(self.state, Review):
+            raise ValueError("Joint alignment can be adjusted only during review")
+        if not 0 <= index < 6 or not math.isfinite(delta_radians) or abs(delta_radians) > 0.1:
+            raise ValueError("Invalid joint alignment adjustment")
+        self.state.draft.offsets[index] += delta_radians
+        if index == 5:
+            closed, opened = self.state.gripper_endpoints
+            self.state.gripper_endpoints = (closed + delta_radians, opened + delta_radians)
 
     def capture_gripper_endpoint(self, endpoint: Literal["closed", "open"]) -> None:
         if not isinstance(self.state, Recording):
@@ -320,6 +408,9 @@ class CalibrationSession:
             self.state.open_gripper_steps = steps
 
     def finish_sweep(self) -> None:
+        if isinstance(self.state, SweepRecording):
+            self._finish_sweep_estimate()
+            return
         if not isinstance(self.state, Recording):
             raise ValueError("Capture a reference pose before recording travel")
         self.view()
@@ -349,6 +440,30 @@ class CalibrationSession:
             )
         positions = self.read_positions()
         settings = self.setup.alignment
+        if isinstance(self.state, SweepRecording):
+            recording = self.state
+            for sweep, position in zip(recording.sweeps, positions, strict=True):
+                sweep.record(position)
+            view = CalibrationView(
+                stage="sweep",
+                serial=self.serial,
+                sweep_only=True,
+                gripper_opening=0.5,
+                joints=[
+                    JointView(
+                        name=name,
+                        position_radians=0.0,
+                        range_min=sweep.minimum,
+                        range_max=sweep.maximum,
+                        sign=sign,
+                    )
+                    for name, sweep, sign in zip(
+                        MOTOR_NAMES, recording.sweeps, recording.signs, strict=True
+                    )
+                ],
+            )
+            self.last_view = view
+            return view
         if isinstance(self.state, (Recording, Review)):
             draft = self.state.draft
             positions = draft.positions(positions, self.original_homing)
@@ -386,6 +501,7 @@ class CalibrationSession:
                 for index, name in enumerate(MOTOR_NAMES)
             ],
             gripper_opening=max(0.0, min(1.0, opening)),
+            estimated=isinstance(self.state, Review) and self.state.estimated,
             gripper_closed_recorded=isinstance(self.state, Review)
             or (isinstance(self.state, Recording) and self.state.closed_gripper_steps is not None),
             gripper_open_recorded=isinstance(self.state, Review)

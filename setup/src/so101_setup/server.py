@@ -40,12 +40,20 @@ class ConnectAction(ActionModel):
 
 
 class SimpleAction(ActionModel):
-    action: Literal["capture_reference", "finish_sweep", "disconnect", "restart"]
+    action: Literal[
+        "capture_reference", "start_sweep", "finish_sweep", "disconnect", "restart", "reopen"
+    ]
 
 
 class ReverseAction(ActionModel):
     action: Literal["reverse_joint"]
     index: int = Field(ge=0, le=5)
+
+
+class AdjustAction(ActionModel):
+    action: Literal["adjust_joint"]
+    index: int = Field(ge=0, le=5)
+    delta_radians: float = Field(ge=-0.1, le=0.1, allow_inf_nan=False)
 
 
 class GripperEndpointAction(ActionModel):
@@ -59,7 +67,12 @@ class SaveAction(ActionModel):
 
 
 Action = Annotated[
-    ConnectAction | SimpleAction | ReverseAction | GripperEndpointAction | SaveAction,
+    ConnectAction
+    | SimpleAction
+    | ReverseAction
+    | AdjustAction
+    | GripperEndpointAction
+    | SaveAction,
     Field(discriminator="action"),
 ]
 ACTION_ADAPTER = TypeAdapter(Action)
@@ -74,6 +87,8 @@ class ApplicationView(BaseModel):
     joints: list[JointView] = Field(default_factory=list)
     gripper_closed_recorded: bool = False
     gripper_open_recorded: bool = False
+    estimated: bool = False
+    sweep_only: bool = False
     gripper_opening: float = 0.5
     reference_joints_radians: list[float] = Field(default_factory=lambda: list(REFERENCE_JOINTS))
     reference_gripper_radians: float = REFERENCE_GRIPPER_RADIANS
@@ -151,16 +166,26 @@ class CalibrationApplication:
                 if self.session is None:
                     raise ValueError("Connect an arm first")
                 match action:
+                    case SimpleAction(action="reopen"):
+                        if self.session.view().stage != "saved":
+                            raise ValueError("Reopen is available after saving")
+                        serial = self.session.serial
+                        self.session = None
+                        self.connect(serial)
                     case SimpleAction(action="restart"):
                         if self.session.view().stage in {"saved", "error"}:
                             raise ValueError("Disconnect and reconnect before creating a new draft")
                         self.session.state = Reference()
+                    case SimpleAction(action="start_sweep"):
+                        self.session.start_sweep()
                     case SimpleAction(action="capture_reference"):
                         self.session.capture_reference()
                     case SimpleAction(action="finish_sweep"):
                         self.session.finish_sweep()
                     case ReverseAction(index=index):
                         self.session.reverse_joint(index)
+                    case AdjustAction(index=index, delta_radians=delta):
+                        self.session.adjust_joint(index, delta)
                     case GripperEndpointAction(endpoint=endpoint):
                         self.session.capture_gripper_endpoint(endpoint)
                     case SaveAction(model_verified=verified):

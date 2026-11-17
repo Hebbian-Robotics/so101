@@ -264,3 +264,50 @@ def test_an_endpoint_captured_while_the_hand_moves_is_inside_its_recorded_limits
     endpoint = session.state.closed_gripper_steps
     assert endpoint is not None
     assert session.state.draft.minimums[5] <= endpoint <= session.state.draft.maximums[5]
+
+
+def test_sweep_estimates_wrapped_wrist_and_gripper_without_writing_registers(
+    tmp_path: Path,
+) -> None:
+    bus = MemoryServoBus()
+    session = session_at(tmp_path, bus, "soft-gripper-camera")
+    session.start_sweep()
+    for wrist in (1500, 900, 300, 3796, 3196, 2596, 2296):
+        bus.registers["present_position"] = [1800, 1800, 1800, 1800, wrist, 1800]
+        session.view()
+    for wrist in (2896, 3496, 0, 600, 1200, 1800, 2047):
+        bus.registers["present_position"] = [2300, 2300, 2300, 2300, wrist, 2300]
+        session.view()
+    session.finish_sweep()
+    assert isinstance(session.state, Review)
+    assert session.state.estimated
+    wrist_calibration = session.state.draft.entries()["wrist_roll"]
+    assert 0 < wrist_calibration.range_min < wrist_calibration.range_max < 4095
+    assert wrist_calibration.range_max - wrist_calibration.range_min > 3600
+    assert session.state.gripper_endpoints[0] == pytest.approx(-0.12105)
+    assert bus.writes == []
+    session.adjust_joint(5, 0.01)
+    assert session.state.gripper_endpoints[0] == pytest.approx(-0.11105)
+    assert bus.writes == []
+
+
+def test_saved_calibration_can_be_adjusted_without_losing_wrist_limits(tmp_path: Path) -> None:
+    bus = MemoryServoBus()
+    session = session_at(tmp_path, bus, "soft-gripper-camera")
+    session.start_sweep()
+    bus.registers["present_position"] = [1700] * 6
+    session.view()
+    bus.registers["present_position"] = [2400] * 6
+    session.view()
+    session.finish_sweep()
+    session.save(model_verified=True)
+    saved = read_calibration(session.directory / "calibration.json")
+    reopened = session_at(tmp_path, bus, "soft-gripper-camera")
+    assert isinstance(reopened.state, Review)
+    reopened.adjust_joint(1, 0.01)
+    assert reopened.state.draft.entries()["wrist_roll"] == saved["wrist_roll"]
+    assert reopened.state.draft.offsets[1] == pytest.approx(
+        session.state
+        and NativeSetupStore().load(session.directory, "ARM_A").alignment.joint_offsets_radians[1]
+        + 0.01
+    )

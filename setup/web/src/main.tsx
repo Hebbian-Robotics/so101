@@ -29,6 +29,8 @@ const viewSchema = z.object({
   gripper_closed_recorded: z.boolean(),
   gripper_open_recorded: z.boolean(),
   gripper_opening: z.number().finite(),
+  estimated: z.boolean().default(false),
+  sweep_only: z.boolean().default(false),
   reference_joints_radians: z.array(z.number().finite()).length(5),
   reference_gripper_radians: z.number().finite(),
   message: z.string(),
@@ -37,8 +39,17 @@ const viewSchema = z.object({
 type CalibrationView = z.infer<typeof viewSchema>;
 type Action =
   | { action: "connect"; serial: string }
-  | { action: "disconnect" | "capture_reference" | "finish_sweep" | "restart" }
+  | {
+      action:
+        | "disconnect"
+        | "capture_reference"
+        | "start_sweep"
+        | "finish_sweep"
+        | "restart"
+        | "reopen";
+    }
   | { action: "reverse_joint"; index: number }
+  | { action: "adjust_joint"; index: number; delta_radians: number }
   | { action: "capture_gripper_endpoint"; endpoint: "closed" | "open" }
   | { action: "save"; model_verified: true };
 const jointNames = [
@@ -93,7 +104,48 @@ async function requestView(
   return viewSchema.parse(payload);
 }
 
+type ThemePreference = "system" | "light" | "dark";
+const themeStorageKey = "so101-calibration-theme";
+
+function readThemePreference(): ThemePreference {
+  try {
+    const stored = localStorage.getItem(themeStorageKey);
+    return stored === "light" || stored === "dark" ? stored : "system";
+  } catch {
+    return "system";
+  }
+}
+
 function App() {
+  const [theme, setTheme] = useState<ThemePreference>(readThemePreference);
+  const [systemDark, setSystemDark] = useState(
+    () => window.matchMedia("(prefers-color-scheme: dark)").matches,
+  );
+  useEffect(() => {
+    if (theme === "system")
+      document.documentElement.removeAttribute("data-theme");
+    else document.documentElement.setAttribute("data-theme", theme);
+    try {
+      if (theme === "system") localStorage.removeItem(themeStorageKey);
+      else localStorage.setItem(themeStorageKey, theme);
+    } catch {
+      // The theme still works when site storage is unavailable.
+    }
+  }, [theme]);
+  useEffect(() => {
+    const preference = window.matchMedia("(prefers-color-scheme: dark)");
+    const updateSystemTheme = () => setSystemDark(preference.matches);
+    const syncStoredTheme = (event: StorageEvent) => {
+      if (event.key === themeStorageKey) setTheme(readThemePreference());
+    };
+    preference.addEventListener("change", updateSystemTheme);
+    window.addEventListener("storage", syncStoredTheme);
+    return () => {
+      preference.removeEventListener("change", updateSystemTheme);
+      window.removeEventListener("storage", syncStoredTheme);
+    };
+  }, []);
+  const darkMode = theme === "dark" || (theme === "system" && systemDark);
   const [view, setView] = useState<CalibrationView | null>(null);
   const [connectionError, setConnectionError] = useState("");
   const [actionError, setActionError] = useState("");
@@ -143,7 +195,11 @@ function App() {
     try {
       setView(await requestView(action));
       setConnectionError("");
-      if (action.action === "capture_reference") setShowReference(false);
+      if (
+        action.action === "capture_reference" ||
+        action.action === "start_sweep"
+      )
+        setShowReference(false);
     } catch (error) {
       setActionError(error instanceof Error ? error.message : String(error));
     } finally {
@@ -178,9 +234,24 @@ function App() {
           <h1>SO-101 calibration</h1>
           <p>Calibrate and align this arm.</p>
         </div>
-        <span className="connection">
-          {view?.serial || "Waiting for an arm"}
-        </span>
+        <div className="heading-controls">
+          <span className="connection">
+            {view?.serial || "Waiting for an arm"}
+          </span>
+          <label className="theme-control">
+            Theme
+            <select
+              value={theme}
+              onChange={(event) =>
+                setTheme(event.target.value as ThemePreference)
+              }
+            >
+              <option value="system">System</option>
+              <option value="light">Light</option>
+              <option value="dark">Dark</option>
+            </select>
+          </label>
+        </div>
       </header>
       <div className="workspace">
         <section className="instructions" aria-label="Calibration steps">
@@ -252,7 +323,27 @@ function App() {
               </p>
             </>
           ) : null}
-          {stage === "reference" ? (
+          {stage === "reference" &&
+          view?.model_variant === "soft-gripper-camera" ? (
+            <>
+              <h2>Start calibration</h2>
+              <p>
+                Support the disabled arm. You will gently sweep each joint
+                through its travel, including wrist rotation and opening and
+                closing the gripper.
+              </p>
+              <button
+                className="primary"
+                type="button"
+                disabled={disabled}
+                onClick={() => void perform({ action: "start_sweep" })}
+              >
+                Start sweep
+              </button>
+            </>
+          ) : null}
+          {stage === "reference" &&
+          view?.model_variant !== "soft-gripper-camera" ? (
             <>
               <h2>Match the reference pose</h2>
               {view?.message ? (
@@ -266,8 +357,8 @@ function App() {
                 opening.
               </p>
               <p>
-                If it is already in this position, capture it now. The reference
-                stays fixed while the gray model follows the current readings.
+                When the physical arm matches, capture the position. The live
+                model and joint readings appear after this step.
               </p>
               <button
                 className="primary"
@@ -279,7 +370,29 @@ function App() {
               </button>
             </>
           ) : null}
-          {stage === "sweep" ? (
+          {stage === "sweep" && view?.sweep_only ? (
+            <>
+              <h2>Record safe travel</h2>
+              <p>
+                Support the arm. Slowly move each joint from one gentle stop to
+                the other, including wrist rotation. Fully close and open the
+                gripper without forcing it.
+              </p>
+              <p>
+                Move slowly enough for the readings to follow. The model appears
+                after you finish the sweep.
+              </p>
+              <button
+                className="primary"
+                type="button"
+                disabled={disabled}
+                onClick={() => void perform({ action: "finish_sweep" })}
+              >
+                Finish recording
+              </button>
+            </>
+          ) : null}
+          {stage === "sweep" && !view?.sweep_only ? (
             <>
               <h2>Record safe travel</h2>
               <p>
@@ -336,8 +449,8 @@ function App() {
               <h2>Check the live model</h2>
               <p>
                 Move the supported arm by hand. Check the joint directions,
-                wrist orientation, and gripper. Existing calibration is reused
-                when it matches the motors.
+                wrist orientation, and gripper. Sweep-based alignment is an
+                estimate; adjust any joint that does not match before saving.
               </p>
               <label className="verification">
                 <input
@@ -371,6 +484,13 @@ function App() {
                 The serial port is released. Calibration and model alignment are
                 saved in your selected setup directory.
               </p>
+              <button
+                type="button"
+                disabled={disabled}
+                onClick={() => void perform({ action: "reopen" })}
+              >
+                Adjust saved setup
+              </button>
               {view?.command ? <pre>{view.command}</pre> : null}
               <p className="detail">{view?.message}</p>
             </>
@@ -412,34 +532,63 @@ function App() {
           </p>
         </section>
         <section className="visual-feedback" aria-label="Calibration feedback">
-          <RobotScene
-            modelUrl={
-              view?.model_variant === "soft-gripper-camera"
-                ? "robot/so101/robot-soft-gripper-camera.urdf"
-                : "robot/so101/robot.urdf"
-            }
-            cameraPosition={calibrationCameraPosition}
-            cameraTarget={calibrationCameraTarget}
-            jointNames={jointNames}
-            measuredJoints={sceneArms[0]?.measuredJoints ?? []}
-            gripperAngleRadians={sceneArms[0]?.gripperAngleRadians}
-            referenceJoints={showReference ? referenceProjection.joints : null}
-            referenceOpening={referenceProjection.opening}
-          />
-          <label className="reference-toggle">
-            <input
-              type="checkbox"
-              checked={showReference}
-              onChange={(event) => setShowReference(event.target.checked)}
+          {view?.sweep_only ||
+          (stage === "reference" &&
+            view?.model_variant === "soft-gripper-camera") ? (
+            <p role="status">The model appears after the sweep.</p>
+          ) : (
+            <RobotScene
+              darkMode={darkMode}
+              modelUrl={
+                view?.model_variant === "soft-gripper-camera"
+                  ? "robot/so101/robot-soft-gripper-camera.urdf"
+                  : "robot/so101/robot.urdf"
+              }
+              cameraPosition={calibrationCameraPosition}
+              cameraTarget={calibrationCameraTarget}
+              jointNames={jointNames}
+              measuredJoints={
+                stage === "reference"
+                  ? []
+                  : (sceneArms[0]?.measuredJoints ?? [])
+              }
+              gripperAngleRadians={sceneArms[0]?.gripperAngleRadians}
+              referenceJoints={
+                stage !== "review" && (stage === "reference" || showReference)
+                  ? referenceProjection.joints
+                  : null
+              }
+              referenceOpening={referenceProjection.opening}
             />
-            Show reference pose
-          </label>
-          <p className="legend">
-            <span className="measured-key" />
-            Measured arm <span className="reference-key" />
-            Reference pose
-          </p>
-          {view?.joints.length ? (
+          )}
+          {stage !== "reference" && stage !== "review" && !view?.sweep_only ? (
+            <label className="reference-toggle">
+              <input
+                type="checkbox"
+                checked={showReference}
+                onChange={(event) => setShowReference(event.target.checked)}
+              />
+              Show reference pose
+            </label>
+          ) : null}
+          {!view?.sweep_only && (
+            <p className="legend">
+              {stage !== "reference" ? (
+                <>
+                  <span className="measured-key" />
+                  Measured arm
+                </>
+              ) : null}
+              {stage !== "review" &&
+              (stage === "reference" || showReference) ? (
+                <>
+                  <span className="reference-key" />
+                  Reference pose
+                </>
+              ) : null}
+            </p>
+          )}
+          {stage !== "reference" && view?.joints.length ? (
             <div className="joint-readings">
               <table>
                 <caption>
@@ -450,26 +599,39 @@ function App() {
                 <thead>
                   <tr>
                     <th>Joint</th>
-                    <th>Angle</th>
+                    {!view?.sweep_only && <th>Angle</th>}
                     <th>Travel recorded</th>
-                    {stage === "sweep" ? <th>Direction</th> : null}
+                    {(stage === "sweep" && !view?.sweep_only) ||
+                    stage === "review" ? (
+                      <th>Adjust model</th>
+                    ) : null}
                   </tr>
                 </thead>
                 <tbody>
                   {view.joints.map((joint, index) => (
                     <tr key={joint.name}>
                       <th scope="row">{labels[joint.name] ?? joint.name}</th>
+                      {!view?.sweep_only && (
+                        <td>
+                          {((joint.position_radians * 180) / Math.PI).toFixed(
+                            1,
+                          )}
+                          °
+                        </td>
+                      )}
                       <td>
-                        {((joint.position_radians * 180) / Math.PI).toFixed(1)}°
+                        {view?.sweep_only
+                          ? joint.range_max > joint.range_min
+                            ? `${(((joint.range_max - joint.range_min) * 360) / 4096).toFixed(0)}°`
+                            : "Move this joint"
+                          : joint.name === "wrist_roll" && !view?.estimated
+                            ? "Full turn (LeRobot)"
+                            : joint.range_max > joint.range_min
+                              ? `${joint.range_min}–${joint.range_max}`
+                              : "Move this joint"}
                       </td>
-                      <td>
-                        {joint.name === "wrist_roll"
-                          ? "Full turn (LeRobot)"
-                          : joint.range_max > joint.range_min
-                            ? `${joint.range_min}–${joint.range_max}`
-                            : "Move this joint"}
-                      </td>
-                      {stage === "sweep" ? (
+                      {(stage === "sweep" && !view?.sweep_only) ||
+                      stage === "review" ? (
                         <td>
                           <button
                             type="button"
@@ -481,6 +643,24 @@ function App() {
                           >
                             Reverse
                           </button>
+                          {stage === "review" &&
+                            [-1, 1].map((direction) => (
+                              <button
+                                key={direction}
+                                type="button"
+                                disabled={disabled}
+                                aria-label={`Adjust ${labels[joint.name] ?? joint.name} ${direction} degree`}
+                                onClick={() =>
+                                  void perform({
+                                    action: "adjust_joint",
+                                    index,
+                                    delta_radians: (direction * Math.PI) / 180,
+                                  })
+                                }
+                              >
+                                {direction > 0 ? "+1°" : "−1°"}
+                              </button>
+                            ))}
                         </td>
                       ) : null}
                     </tr>

@@ -12,6 +12,7 @@ import {
 
 type Position = [number, number, number];
 type SceneProps = {
+  darkMode: boolean;
   modelUrl?: string;
   jointNames: string[];
   measuredJoints: (number | null)[];
@@ -52,6 +53,12 @@ function Models({ template, ...props }: SceneProps & { template: URDFRobot }) {
   const models = useMemo(() => {
     const measured = template.clone() as URDFRobot;
     const reference = template.clone() as URDFRobot;
+    // URDFLoader resets ignoreLimits when cloning joints. Calibration must
+    // display the measured pose even outside the model's nominal limits.
+    for (const robot of [measured, reference]) {
+      for (const joint of Object.values(robot.joints))
+        joint.ignoreLimits = true;
+    }
     colorRobot(measured, 0x999999, 1);
     colorRobot(reference, 0x087f8c, 0.4);
     return { measured, reference };
@@ -126,11 +133,19 @@ export function RobotScene(props: SceneProps) {
               camera={{ fov: 40, near: 0.01, far: 30 }}
               aria-label="Robot model: drag to orbit, scroll to zoom"
             >
-              <color attach="background" args={["#eeeeee"]} />
+              <color
+                attach="background"
+                args={[props.darkMode ? "#17212b" : "#eeeeee"]}
+              />
               <hemisphereLight args={[0xffffff, 0x888888, 1.5]} />
               <directionalLight position={[2, -3, 4]} intensity={1.5} />
               <gridHelper
-                args={[2, 20, 0xaaaaaa, 0xd8d8d8]}
+                args={[
+                  2,
+                  20,
+                  props.darkMode ? 0x657787 : 0xaaaaaa,
+                  props.darkMode ? 0x344553 : 0xd8d8d8,
+                ]}
                 rotation={[Math.PI / 2, 0, 0]}
               />
               <axesHelper args={[0.2]} />
