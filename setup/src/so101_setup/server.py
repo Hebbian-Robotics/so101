@@ -98,6 +98,8 @@ class ApplicationView(BaseModel):
     home_gripper_radians: float = HOME_GRIPPER_RADIANS
     message: str = ""
     command: str = ""
+    configuration_path: str = ""
+    calibration_path: str = ""
 
 
 class CalibrationApplication:

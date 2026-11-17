@@ -10,9 +10,10 @@ import os
 import subprocess
 import sys
 import tempfile
+from http.cookiejar import CookieJar
 from pathlib import Path
 from urllib.parse import urlsplit
-from urllib.request import Request, urlopen
+from urllib.request import HTTPCookieProcessor, build_opener, urlopen
 from xml.etree import ElementTree
 
 
@@ -88,10 +89,14 @@ assert (assets / 'robot/so101/LICENSE.txt').is_file()
             assert process.stdout is not None
             line = process.stdout.readline()
             address = urlsplit(line.removeprefix("SO-101 calibration: ").strip())
-            if address.hostname != "127.0.0.1" or address.port is None or not address.fragment:
+            if address.hostname != "127.0.0.1" or address.port is None:
                 raise RuntimeError(f"Calibration CLI did not start: {line!r}")
             origin = f"http://127.0.0.1:{address.port}"
-            for path in ("/", "/robot/so101/LICENSE.txt", "/robot/so101/SOFT_GRIPPER_NOTICE.txt"):
+            browser = build_opener(HTTPCookieProcessor(CookieJar()))
+            with browser.open(origin + "/", timeout=5) as response:
+                assert response.status == 200
+                assert response.read()
+            for path in ("/robot/so101/LICENSE.txt", "/robot/so101/SOFT_GRIPPER_NOTICE.txt"):
                 with urlopen(origin + path, timeout=5) as response:
                     assert response.status == 200
                     assert response.read()
@@ -104,11 +109,7 @@ assert (assets / 'robot/so101/LICENSE.txt').is_file()
                     with urlopen(f"{origin}/robot/so101/{mesh_path}", timeout=5) as response:
                         assert response.status == 200, mesh_path
                         assert response.read(), mesh_path
-            request = Request(
-                origin + "/api/state",
-                headers={"Authorization": f"Bearer {address.fragment}"},
-            )
-            with urlopen(request, timeout=5) as response:
+            with browser.open(origin + "/api/state", timeout=5) as response:
                 state = json.load(response)
                 assert state["stage"] == "disconnected"
                 assert all(not controller["registered"] for controller in state["controllers"])
