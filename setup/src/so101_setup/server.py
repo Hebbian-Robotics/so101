@@ -23,8 +23,6 @@ from pydantic import BaseModel, ConfigDict, Field, TypeAdapter
 from .calibration import (
     HOME_GRIPPER_RADIANS,
     HOME_JOINTS,
-    REFERENCE_GRIPPER_RADIANS,
-    REFERENCE_JOINTS,
     CalibrationSession,
     JointView,
     Reference,
@@ -98,8 +96,6 @@ class ApplicationView(BaseModel):
     gripper_opening: float = 0.5
     home_joints_radians: list[float] = Field(default_factory=lambda: list(HOME_JOINTS))
     home_gripper_radians: float = HOME_GRIPPER_RADIANS
-    reference_joints_radians: list[float] = Field(default_factory=lambda: list(REFERENCE_JOINTS))
-    reference_gripper_radians: float = REFERENCE_GRIPPER_RADIANS
     message: str = ""
     command: str = ""
 
@@ -153,7 +149,7 @@ class CalibrationApplication:
                     return ApplicationView(
                         stage="disconnected",
                         controllers=controllers,
-                        message="Plug in an arm, or select its USB controller below. New controllers need explicit selection.",
+                        message="Plug in an arm, or select its USB controller below.",
                     )
             assert self.session is not None
             view = ApplicationView.model_validate(self.session.view().model_dump())

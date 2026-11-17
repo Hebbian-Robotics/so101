@@ -33,8 +33,6 @@ const viewSchema = z.object({
   sweep_only: z.boolean().default(false),
   home_joints_radians: z.array(z.number().finite()).length(5),
   home_gripper_radians: z.number().finite(),
-  reference_joints_radians: z.array(z.number().finite()).length(5),
-  reference_gripper_radians: z.number().finite(),
   message: z.string(),
   command: z.string(),
 });
@@ -573,15 +571,9 @@ function App() {
                         </td>
                       )}
                       <td>
-                        {view?.sweep_only
-                          ? joint.range_max > joint.range_min
-                            ? `${(((joint.range_max - joint.range_min) * 360) / 4096).toFixed(0)}°`
-                            : "Move this joint"
-                          : joint.name === "wrist_roll" && !view?.estimated
-                            ? "Full turn (LeRobot)"
-                            : joint.range_max > joint.range_min
-                              ? `${joint.range_min}–${joint.range_max}`
-                              : "Move this joint"}
+                        {joint.range_max > joint.range_min
+                          ? `${(((joint.range_max - joint.range_min) * 360) / 4096).toFixed(0)}°`
+                          : "Move this joint"}
                       </td>
                       {(stage === "sweep" && !view?.sweep_only) ||
                       stage === "review" ? (
