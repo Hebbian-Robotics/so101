@@ -192,6 +192,8 @@ class CalibrationView(BaseModel):
     sweep_only: bool = False
     message: str = ""
     command: str = ""
+    configuration_path: str = ""
+    calibration_path: str = ""
 
 
 def atomic_write(path: Path, content: bytes) -> None:
@@ -437,6 +439,12 @@ class CalibrationSession:
                     if isinstance(self.state, Saved)
                     else self.state.message,
                     "command": "",
+                    "configuration_path": str(self.state.configuration)
+                    if isinstance(self.state, Saved)
+                    else "",
+                    "calibration_path": str(self.directory / "calibration.json")
+                    if isinstance(self.state, Saved)
+                    else "",
                 }
             )
         positions = self.read_positions()

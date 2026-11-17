@@ -102,6 +102,8 @@ class ApplicationView(BaseModel):
     reference_gripper_radians: float = REFERENCE_GRIPPER_RADIANS
     message: str = ""
     command: str = ""
+    configuration_path: str = ""
+    calibration_path: str = ""
 
 
 class CalibrationApplication:

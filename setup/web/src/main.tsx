@@ -37,7 +37,8 @@ const viewSchema = z.object({
   reference_joints_radians: z.array(z.number().finite()).length(5),
   reference_gripper_radians: z.number().finite(),
   message: z.string(),
-  command: z.string(),
+  configuration_path: z.string().default(""),
+  calibration_path: z.string().default(""),
 });
 type CalibrationView = z.infer<typeof viewSchema>;
 type Action =
@@ -464,7 +465,7 @@ function App() {
           ) : null}
           {stage === "saved" ? (
             <>
-              <h2>{view?.command ? "Ready for the viewer" : "Setup saved"}</h2>
+              <h2>Setup saved</h2>
               <p>
                 The serial port is released. Calibration and model alignment are
                 saved in your selected setup directory.
@@ -476,7 +477,16 @@ function App() {
               >
                 Adjust saved setup
               </button>
-              {view?.command ? <pre>{view.command}</pre> : null}
+              <p>Saved files:</p>
+              <pre>
+                {[view?.configuration_path, view?.calibration_path]
+                  .filter(Boolean)
+                  .join("\n")}
+              </pre>
+              <p className="detail">
+                If these files are in a shared configuration repository, review
+                and share the changes with your team.
+              </p>
               <p className="detail">{view?.message}</p>
             </>
           ) : null}
