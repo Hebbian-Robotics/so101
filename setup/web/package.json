@@ -12,7 +12,7 @@
   "scripts": {
     "build": "tsc --noEmit && vite build && cp -R ../src/so101_setup/assets/robot ../src/so101_setup/assets/web/robot && node tools/write-notices.ts",
     "typecheck": "tsc --noEmit",
-    "lint": "biome check .",
+    "lint": "biome check --error-on-warnings .",
     "format": "biome check --write .",
     "check": "pnpm lint && pnpm typecheck"
   },

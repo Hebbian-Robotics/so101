@@ -43,7 +43,7 @@ def main() -> None:
                 "--python",
                 str(python),
                 "--exclude-newer",
-                "7 days",
+                "3 days",
                 str(wheel),
             ],
             check=True,
@@ -93,7 +93,8 @@ assert (assets / 'robot/so101/LICENSE.txt').is_file()
             origin = f"http://127.0.0.1:{address.port}"
             for path in ("/", "/robot/so101/LICENSE.txt", "/robot/so101/SOFT_GRIPPER_NOTICE.txt"):
                 with urlopen(origin + path, timeout=5) as response:
-                    assert response.status == 200 and response.read()
+                    assert response.status == 200
+                    assert response.read()
             for model in ("robot.urdf", "robot-soft-gripper-camera.urdf"):
                 with urlopen(f"{origin}/robot/so101/{model}", timeout=5) as response:
                     robot = ElementTree.fromstring(response.read())
@@ -101,7 +102,8 @@ assert (assets / 'robot/so101/LICENSE.txt').is_file()
                 assert mesh_paths, model
                 for mesh_path in mesh_paths:
                     with urlopen(f"{origin}/robot/so101/{mesh_path}", timeout=5) as response:
-                        assert response.status == 200 and response.read(), mesh_path
+                        assert response.status == 200, mesh_path
+                        assert response.read(), mesh_path
             request = Request(
                 origin + "/api/state",
                 headers={"Authorization": f"Bearer {address.fragment}"},

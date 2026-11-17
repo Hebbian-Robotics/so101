@@ -24,13 +24,15 @@
     "urdf-loader": "^0.13.1"
   },
   "scripts": {
-    "lint": "biome check .",
+    "lint": "biome check --error-on-warnings .",
     "format": "biome check --write .",
     "typecheck": "pnpm --dir setup/web typecheck",
-    "check": "pnpm lint && pnpm typecheck",
-    "build": "pnpm --dir setup/web build"
+    "check": "pnpm lint && pnpm typecheck && pnpm knip",
+    "build": "pnpm --dir setup/web build",
+    "knip": "knip"
   },
   "devDependencies": {
-    "@biomejs/biome": "2.6.6"
+    "@biomejs/biome": "2.6.6",
+    "knip": "^6.45.0"
   }
 }

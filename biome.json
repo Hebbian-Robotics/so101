@@ -21,9 +21,38 @@
         "noUnusedFunctionParameters": "error"
       },
       "suspicious": {
-        "noExplicitAny": "warn"
+        "noExplicitAny": "error",
+        "noDuplicateTestHooks": "error"
       },
-      "preset": "recommended"
+      "preset": "recommended",
+      "nursery": {
+        "noFloatingPromises": "error",
+        "useExhaustiveSwitchCases": {
+          "level": "error",
+          "options": {
+            "requireExplicitCase": true
+          }
+        },
+        "noExcessiveNestedBlocks": {
+          "level": "error",
+          "options": {
+            "max": 4
+          }
+        }
+      },
+      "complexity": {
+        "noExcessiveNestedTestSuites": "error"
+      },
+      "style": {
+        "noUselessElse": "error",
+        "noDoneCallback": "error",
+        "noParameterAssign": {
+          "level": "error",
+          "options": {
+            "propertyAssignment": "allow"
+          }
+        }
+      }
     }
   },
   "javascript": {
