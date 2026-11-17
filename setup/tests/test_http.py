@@ -1,5 +1,6 @@
 """Local HTTP access protects calibration actions and serves only built assets."""
 
+import json
 from http.client import HTTPConnection
 from pathlib import Path
 from threading import Thread
@@ -28,6 +29,7 @@ def test_api_requires_session_authorization_and_static_requests_stay_inside_asse
             connection = HTTPConnection("127.0.0.1", server.server_port, timeout=5)
             for method, path, body, expected in [
                 ("GET", "/api/state", None, 401),
+                ("GET", "/api/events", None, 401),
                 ("POST", "/api/action", '{"action":"capture_reference"}', 403),
                 ("GET", "/../private.txt", None, 404),
                 ("GET", "/", None, 200),
@@ -45,6 +47,16 @@ def test_api_requires_session_authorization_and_static_requests_stay_inside_asse
             # USB access may be busy when the real calibrator is running.
             assert response.status in (200, 503)
             response.read()
+            stream = HTTPConnection("127.0.0.1", server.server_port, timeout=5)
+            stream.request("GET", "/api/events", headers={"Cookie": session_cookie})
+            event_response = stream.getresponse()
+            assert event_response.status == 200
+            assert event_response.getheader("Content-Type") == "text/event-stream"
+            event = event_response.readline().decode().strip()
+            data = event_response.readline().decode().strip()
+            assert event in {"event: view", "event: view-error"}
+            assert isinstance(json.loads(data.removeprefix("data: ")), dict)
+            stream.close()
             connection.request(
                 "POST",
                 "/api/action",
@@ -66,5 +78,6 @@ def test_api_requires_session_authorization_and_static_requests_stay_inside_asse
             response.read()
             connection.close()
         finally:
+            application.close()
             server.shutdown()
             thread.join(timeout=5)

@@ -143,43 +143,51 @@ function App() {
   const [actionError, setActionError] = useState("");
   const [busy, setBusy] = useState(false);
   const [verified, setVerified] = useState(false);
-  const generation = useRef(0);
   const acting = useRef(false);
+  const eventStream = useRef<EventSource | null>(null);
+  const [streamGeneration, setStreamGeneration] = useState(0);
+  // biome-ignore lint/correctness/useExhaustiveDependencies: Reopen the stream after each action to discard queued pre-action events.
   useEffect(() => {
-    const controller = new AbortController();
-    let timer: ReturnType<typeof setTimeout>;
-    async function poll() {
-      const currentGeneration = generation.current;
+    const stream = new EventSource("api/events");
+    eventStream.current = stream;
+    stream.addEventListener("view", (event: MessageEvent<string>) => {
+      if (eventStream.current !== stream || acting.current) return;
       try {
-        if (!acting.current) {
-          const fresh = await requestView(undefined, controller.signal);
-          if (currentGeneration === generation.current) {
-            setView(fresh);
-            setConnectionError("");
-          }
-        }
+        setView(viewSchema.parse(JSON.parse(event.data)));
+        setConnectionError("");
       } catch (error) {
-        if (
-          !controller.signal.aborted &&
-          currentGeneration === generation.current
-        )
-          setConnectionError(
-            error instanceof Error ? error.message : String(error),
-          );
-      } finally {
-        if (!controller.signal.aborted) timer = setTimeout(poll, 200);
+        setConnectionError(
+          error instanceof Error ? error.message : String(error),
+        );
       }
-    }
-    void poll();
-    return () => {
-      controller.abort();
-      clearTimeout(timer);
+    });
+    stream.addEventListener("view-error", (event: MessageEvent<string>) => {
+      if (eventStream.current !== stream || acting.current) return;
+      try {
+        setConnectionError(
+          z.object({ message: z.string() }).parse(JSON.parse(event.data))
+            .message,
+        );
+      } catch {
+        setConnectionError("Invalid response from the calibration server.");
+      }
+    });
+    stream.onerror = () => {
+      if (eventStream.current === stream && !acting.current)
+        setConnectionError(
+          "Connection lost. Reconnecting to the calibration server…",
+        );
     };
-  }, []);
+    return () => {
+      stream.close();
+      if (eventStream.current === stream) eventStream.current = null;
+    };
+  }, [streamGeneration]);
   async function perform(action: Action) {
     if (acting.current) return;
     acting.current = true;
-    generation.current += 1;
+    eventStream.current?.close();
+    eventStream.current = null;
     setBusy(true);
     setVerified(false);
     setActionError("");
@@ -191,6 +199,7 @@ function App() {
     } finally {
       acting.current = false;
       setBusy(false);
+      setStreamGeneration((generation) => generation + 1);
     }
   }
   const stage = view?.stage ?? "disconnected";

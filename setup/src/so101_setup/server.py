@@ -117,6 +117,48 @@ class CalibrationApplication:
         self.session: CalibrationSession | None = None
         self.auto_connect = True
         self.lock = threading.RLock()
+        self.stream_condition = threading.Condition()
+        self.stream_subscribers = 0
+        self.stream_sequence = 0
+        self.stream_payload = b""
+        self.stream_stop = threading.Event()
+        self.stream_thread: threading.Thread | None = None
+
+    def subscribe(self) -> int:
+        with self.stream_condition:
+            self.stream_subscribers += 1
+            if self.stream_thread is None or not self.stream_thread.is_alive():
+                self.stream_stop.clear()
+                self.stream_thread = threading.Thread(target=self.sample_views, daemon=True)
+                self.stream_thread.start()
+            return self.stream_sequence
+
+    def unsubscribe(self) -> None:
+        with self.stream_condition:
+            self.stream_subscribers -= 1
+
+    def sample_views(self) -> None:
+        while not self.stream_stop.is_set():
+            with self.stream_condition:
+                if self.stream_subscribers == 0:
+                    self.stream_thread = None
+                    return
+            with self.lock:
+                try:
+                    payload = (
+                        b"event: view\ndata: " + self.view().model_dump_json().encode() + b"\n\n"
+                    )
+                except Exception as error:
+                    payload = (
+                        b"event: view-error\ndata: "
+                        + json.dumps({"message": str(error)}).encode()
+                        + b"\n\n"
+                    )
+                with self.stream_condition:
+                    self.stream_payload = payload
+                    self.stream_sequence += 1
+                    self.stream_condition.notify_all()
+            self.stream_stop.wait(0.2)
 
     def controllers(self) -> list[ControllerChoice]:
         return discover_controllers(self.config_directory, self.store)
@@ -165,7 +207,7 @@ class CalibrationApplication:
             if isinstance(action, ConnectAction):
                 self.connect(action.serial)
             elif isinstance(action, SimpleAction) and action.action == "disconnect":
-                self.close()
+                self.close_session()
                 self.auto_connect = False
             else:
                 if self.session is None:
@@ -198,6 +240,15 @@ class CalibrationApplication:
             return self.view()
 
     def close(self) -> None:
+        self.stream_stop.set()
+        with self.stream_condition:
+            self.stream_condition.notify_all()
+            stream_thread = self.stream_thread
+        if stream_thread is not None and stream_thread is not threading.current_thread():
+            stream_thread.join()
+        self.close_session()
+
+    def close_session(self) -> None:
         if self.session is not None:
             self.session.bus.close()
             self.session = None
@@ -281,6 +332,12 @@ class CalibrationRequestHandler(BaseHTTPRequestHandler):
             self.reply(HTTPStatus.FORBIDDEN, b"{}")
             return
         path = urlsplit(self.path).path
+        if path == "/api/events":
+            if not self.authenticated():
+                self.reply(HTTPStatus.UNAUTHORIZED, b"{}")
+                return
+            self.stream_events()
+            return
         if path == "/api/state":
             if not self.authenticated():
                 self.reply(
@@ -308,6 +365,36 @@ class CalibrationRequestHandler(BaseHTTPRequestHandler):
             mimetypes.guess_type(requested.name)[0] or "application/octet-stream",
             set_session=path == "/",
         )
+
+    def stream_events(self) -> None:
+        self.send_response(HTTPStatus.OK)
+        self.send_header("Content-Type", "text/event-stream")
+        self.send_header("Cache-Control", "no-store")
+        self.send_header("X-Content-Type-Options", "nosniff")
+        self.end_headers()
+        sequence = self.application.subscribe()
+        try:
+            while not self.application.stream_stop.is_set():
+                with self.application.stream_condition:
+                    self.application.stream_condition.wait_for(
+                        lambda last_sequence=sequence: (
+                            self.application.stream_sequence != last_sequence
+                            or self.application.stream_stop.is_set()
+                        ),
+                        timeout=1,
+                    )
+                    if self.application.stream_stop.is_set():
+                        break
+                    if self.application.stream_sequence == sequence:
+                        continue
+                    sequence = self.application.stream_sequence
+                    payload = self.application.stream_payload
+                self.wfile.write(payload)
+                self.wfile.flush()
+        except (BrokenPipeError, ConnectionResetError, TimeoutError):
+            pass
+        finally:
+            self.application.unsubscribe()
 
     def do_POST(self) -> None:
         if (
@@ -375,7 +462,12 @@ def serve_application(
             flush=True,
         )
         with contextlib.suppress(KeyboardInterrupt):
-            server.serve_forever()
+            try:
+                server.serve_forever()
+            finally:
+                application.stream_stop.set()
+                with application.stream_condition:
+                    application.stream_condition.notify_all()
 
 
 def command_line() -> None:
