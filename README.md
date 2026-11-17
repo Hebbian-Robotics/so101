@@ -35,8 +35,8 @@ Choose a different setup directory when needed:
 so101-calibrate --setup-directory ./my-arm-setups
 ```
 
-For the latest source version, including model selection for a new arm, follow
-the [source setup instructions](setup/README.md).
+For the source version and model selection for a new arm, see the
+[setup instructions](setup/README.md).
 
 Each controller gets its own `arms/<serial>/setup.toml` and LeRobot-compatible
 `calibration.json`. See the [setup guide](setup/README.md) for saved files,
@@ -47,7 +47,7 @@ backups and calibration details.
 In an existing Rust project, add the driver from this release:
 
 ```sh
-cargo add hebbian-so101 --git https://github.com/Hebbian-Robotics/so101 --tag v0.1.0
+cargo add hebbian-so101 --git https://github.com/Hebbian-Robotics/so101 --tag v0.1.5
 ```
 
 Use `Servos` to open the configured bus, run preflight and read joint angles and
@@ -63,7 +63,7 @@ is optional when using the driver.
 In an existing React/Three.js project:
 
 ```sh
-pnpm add '@hebbian/so101-model@github:Hebbian-Robotics/so101#v0.1.0'
+pnpm add '@hebbian/so101-model@github:Hebbian-Robotics/so101#v0.1.5'
 ```
 
 Import helpers from `@hebbian/so101-model/robot-model`. For example,
