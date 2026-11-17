@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
 import { z } from "zod";
+import hebbianLogo from "./hebbian-logo.svg";
 import { RobotScene } from "./robot-scene.js";
 import "./style.css";
 
@@ -208,6 +209,12 @@ function App() {
   ];
   return (
     <main>
+      <div className="brand">
+        <img src={hebbianLogo} alt="" />
+        <span>
+          Hebbian <strong>Robot Use</strong>
+        </span>
+      </div>
       <header className="page-heading">
         <div>
           <h1>SO-101 calibration</h1>
