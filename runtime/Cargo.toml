@@ -35,6 +35,7 @@ todo = "deny"
 unimplemented = "deny"
 needless_pass_by_value = "allow"
 unnecessary_wraps = "allow"
+missing_errors_doc = "allow"
 missing_panics_doc = "allow"
 
 [profile.dev]
