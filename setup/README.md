@@ -1,9 +1,13 @@
 # Calibration and setup
 
-Run `so101-calibrate` and open the local URL it prints. USB serials select saved
-setups; unknown controllers require explicit selection. With the arm supported
-and torque off, match the reference pose, record safe joint travel and explicit
-gripper endpoints, review model alignment, then save.
+Run `so101-calibrate` and open the local URL it prints. A single connected USB
+controller is selected automatically; choose one if several are connected.
+For the soft-gripper-and-camera assembly, support the disabled arm in the shown
+resting pose with the gripper closed, then start recording and gently sweep
+each joint through its safe travel, including wrist roll and gripper opening.
+Review and adjust the live model before saving. The home pose is an estimate,
+so compare multiple positions. The stock-gripper variant uses its reference
+pose and explicit gripper endpoints.
 
 Draft capture and range recording change no registers. Save backs up the prior
 files/registers, writes and verifies calibration/settings with torque off, then

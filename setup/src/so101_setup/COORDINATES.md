@@ -14,13 +14,18 @@ by LeRobot homing. These constants follow the encoding and homing convention;
 they are not fitted from measurements. Signs and offsets express the particular
 assembly's alignment to the model. They are not established by travel limits.
 
-A new reference capture assumes the physical arm matches the illustrated URDF
-pose: five model joint angles at zero and gripper angle at 0.75 rad. The tool
+For the soft-gripper-and-camera assembly, the reference capture assumes the
+physical arm is in the displayed supported resting pose, with the gripper
+closed. The sweep tracks encoder wraparound, including wrist roll, and records
+the measured limits. The reference is approximate and must be reviewed against
+the real arm. The stock-gripper workflow instead assumes five model joint angles
+at zero and a gripper angle of 0.75 rad. The tool
 computes candidate homing offsets and model offsets without writing registers.
 Feetech reports `(encoder - homing_offset) mod 4096`. When the signed homing
 register's limit leaves the captured reference one count away from 2047, the
 model offset absorbs that count. Range collection uses this same candidate
-coordinate system. Wrist roll follows LeRobot's full-turn convention.
+coordinate system. The stock-gripper workflow follows LeRobot's full-turn
+wrist convention.
 
 The optional gripper endpoints describe intended closed/open positions. They
 can be inside the motor's recorded range and can occur in either encoder order.

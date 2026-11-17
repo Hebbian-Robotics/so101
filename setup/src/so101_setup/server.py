@@ -10,6 +10,7 @@ import threading
 from collections.abc import Callable
 from functools import partial
 from http import HTTPStatus
+from http.cookies import CookieError, SimpleCookie
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from socket import socket
@@ -20,6 +21,8 @@ from urllib.parse import unquote, urlsplit
 from pydantic import BaseModel, ConfigDict, Field, TypeAdapter
 
 from .calibration import (
+    HOME_GRIPPER_RADIANS,
+    HOME_JOINTS,
     REFERENCE_GRIPPER_RADIANS,
     REFERENCE_JOINTS,
     CalibrationSession,
@@ -93,6 +96,8 @@ class ApplicationView(BaseModel):
     estimated: bool = False
     sweep_only: bool = False
     gripper_opening: float = 0.5
+    home_joints_radians: list[float] = Field(default_factory=lambda: list(HOME_JOINTS))
+    home_gripper_radians: float = HOME_GRIPPER_RADIANS
     reference_joints_radians: list[float] = Field(default_factory=lambda: list(REFERENCE_JOINTS))
     reference_gripper_radians: float = REFERENCE_GRIPPER_RADIANS
     message: str = ""
@@ -142,9 +147,8 @@ class CalibrationApplication:
         with self.lock:
             if self.session is None:
                 controllers = self.controllers()
-                registered = [controller for controller in controllers if controller.registered]
-                if self.auto_connect and len(registered) == 1:
-                    self.connect(registered[0].serial)
+                if self.auto_connect and len(controllers) == 1:
+                    self.connect(controllers[0].serial)
                 else:
                     return ApplicationView(
                         stage="disconnected",
@@ -240,30 +244,50 @@ class CalibrationRequestHandler(BaseHTTPRequestHandler):
         status: HTTPStatus,
         content: bytes,
         content_type: str = "application/json",
+        *,
+        set_session: bool = False,
     ) -> None:
         self.send_response(status)
         self.send_header("Content-Type", content_type)
         self.send_header("Content-Length", str(len(content)))
         self.send_header("Cache-Control", "no-store")
         self.send_header("X-Content-Type-Options", "nosniff")
+        if set_session:
+            self.send_header(
+                "Set-Cookie", f"so101_session={self.token}; HttpOnly; SameSite=Strict; Path=/"
+            )
         self.send_header(
             "Content-Security-Policy",
-            "default-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:",
+            "default-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; frame-ancestors 'none'",
         )
         self.end_headers()
         self.wfile.write(content)
 
+    def local_host(self) -> bool:
+        address = self.server.server_address
+        if not isinstance(address, tuple) or len(address) < 2:
+            return False
+        port = address[1]
+        return self.headers.get("Host", "") in {f"127.0.0.1:{port}", f"localhost:{port}"}
+
     def authenticated(self) -> bool:
-        provided = self.headers.get("Authorization", "")
-        return secrets.compare_digest(provided, f"Bearer {self.token}")
+        try:
+            cookies = SimpleCookie(self.headers.get("Cookie", ""))
+        except CookieError:
+            return False
+        session = cookies.get("so101_session")
+        return session is not None and secrets.compare_digest(session.value, self.token)
 
     def do_GET(self) -> None:
+        if not self.local_host():
+            self.reply(HTTPStatus.FORBIDDEN, b"{}")
+            return
         path = urlsplit(self.path).path
         if path == "/api/state":
             if not self.authenticated():
                 self.reply(
                     HTTPStatus.UNAUTHORIZED,
-                    b'{"message":"Open the URL printed by the calibration command."}',
+                    b'{"message":"Reload the calibration page to start a session."}',
                 )
                 return
             try:
@@ -284,9 +308,16 @@ class CalibrationRequestHandler(BaseHTTPRequestHandler):
             HTTPStatus.OK,
             requested.read_bytes(),
             mimetypes.guess_type(requested.name)[0] or "application/octet-stream",
+            set_session=path == "/",
         )
 
     def do_POST(self) -> None:
+        if (
+            not self.local_host()
+            or self.headers.get("Origin") != f"http://{self.headers.get('Host', '')}"
+        ):
+            self.reply(HTTPStatus.FORBIDDEN, b"{}")
+            return
         if urlsplit(self.path).path != "/api/action":
             self.reply(HTTPStatus.NOT_FOUND, b"{}")
             return
@@ -342,7 +373,7 @@ def serve_application(
         ) as server,
     ):
         print(
-            f"SO-101 calibration: http://127.0.0.1:{server.server_port}/#{token}",
+            f"SO-101 calibration: http://127.0.0.1:{server.server_port}/",
             flush=True,
         )
         with contextlib.suppress(KeyboardInterrupt):

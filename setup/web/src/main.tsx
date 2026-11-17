@@ -31,6 +31,8 @@ const viewSchema = z.object({
   gripper_opening: z.number().finite(),
   estimated: z.boolean().default(false),
   sweep_only: z.boolean().default(false),
+  home_joints_radians: z.array(z.number().finite()).length(5),
+  home_gripper_radians: z.number().finite(),
   reference_joints_radians: z.array(z.number().finite()).length(5),
   reference_gripper_radians: z.number().finite(),
   message: z.string(),
@@ -59,14 +61,6 @@ const jointNames = [
   "wrist_flex",
   "wrist_roll",
 ];
-const referenceJoints = [0, 0, 0, 0, 0];
-const fallbackReferenceProjection = {
-  arm: "follower",
-  joints: referenceJoints,
-  opening: 0.55,
-  withinTolerance: true,
-  stale: false,
-};
 const labels: Record<string, string> = {
   shoulder_pan: "Shoulder pan",
   shoulder_lift: "Shoulder lift",
@@ -77,7 +71,6 @@ const labels: Record<string, string> = {
 };
 const calibrationCameraPosition: [number, number, number] = [0.9, -0.9, 0.75];
 const calibrationCameraTarget: [number, number, number] = [0.1, 0, 0.25];
-const token = window.location.hash.slice(1);
 
 async function requestView(
   action?: Action,
@@ -86,7 +79,6 @@ async function requestView(
   const response = await fetch(action ? "api/action" : "api/state", {
     method: action ? "POST" : "GET",
     headers: {
-      Authorization: `Bearer ${token}`,
       ...(action ? { "Content-Type": "application/json" } : {}),
     },
     ...(action ? { body: JSON.stringify(action) } : {}),
@@ -151,7 +143,6 @@ function App() {
   const [actionError, setActionError] = useState("");
   const [busy, setBusy] = useState(false);
   const [verified, setVerified] = useState(false);
-  const [showReference, setShowReference] = useState(true);
   const generation = useRef(0);
   const acting = useRef(false);
   useEffect(() => {
@@ -195,11 +186,6 @@ function App() {
     try {
       setView(await requestView(action));
       setConnectionError("");
-      if (
-        action.action === "capture_reference" ||
-        action.action === "start_sweep"
-      )
-        setShowReference(false);
     } catch (error) {
       setActionError(error instanceof Error ? error.message : String(error));
     } finally {
@@ -210,13 +196,6 @@ function App() {
   const stage = view?.stage ?? "disconnected";
   const connected = Boolean(view?.serial);
   const disabled = busy || Boolean(connectionError);
-  const referenceProjection = view
-    ? {
-        ...fallbackReferenceProjection,
-        joints: view.reference_joints_radians,
-        opening: (view.reference_gripper_radians + 0.174533) / 1.674533,
-      }
-    : fallbackReferenceProjection;
   const sceneArms = [
     {
       arm: "follower",
@@ -328,9 +307,9 @@ function App() {
             <>
               <h2>Start calibration</h2>
               <p>
-                Support the disabled arm. You will gently sweep each joint
-                through its travel, including wrist rotation and opening and
-                closing the gripper.
+                Support and disable the arm. Place it in the resting pose shown,
+                with the gripper fully closed. Start the sweep to capture this
+                reference, then gently move each joint through its travel.
               </p>
               <button
                 className="primary"
@@ -352,13 +331,12 @@ function App() {
                 </p>
               ) : null}
               <p>
-                Support the arm and place it in the translucent blue pose. Match
-                the wrist orientation and set the gripper to the illustrated
-                opening.
+                Support the arm. Set each of the five joints to its model zero
+                and the gripper to approximately 43° open.
               </p>
               <p>
-                When the physical arm matches, capture the position. The live
-                model and joint readings appear after this step.
+                When the physical arm is positioned, capture it. The live model
+                and joint readings appear after this step.
               </p>
               <button
                 className="primary"
@@ -510,7 +488,6 @@ function App() {
                   type="button"
                   disabled={disabled}
                   onClick={() => {
-                    setShowReference(true);
                     void perform({ action: "restart" });
                   }}
                 >
@@ -532,9 +509,7 @@ function App() {
           </p>
         </section>
         <section className="visual-feedback" aria-label="Calibration feedback">
-          {view?.sweep_only ||
-          (stage === "reference" &&
-            view?.model_variant === "soft-gripper-camera") ? (
+          {view?.sweep_only ? (
             <p role="status">The model appears after the sweep.</p>
           ) : (
             <RobotScene
@@ -548,46 +523,24 @@ function App() {
               cameraTarget={calibrationCameraTarget}
               jointNames={jointNames}
               measuredJoints={
+                stage === "reference" &&
+                view?.model_variant === "soft-gripper-camera"
+                  ? view.home_joints_radians
+                  : stage === "reference"
+                    ? []
+                    : (sceneArms[0]?.measuredJoints ?? [])
+              }
+              gripperAngleRadians={
                 stage === "reference"
-                  ? []
-                  : (sceneArms[0]?.measuredJoints ?? [])
+                  ? view?.home_gripper_radians
+                  : sceneArms[0]?.gripperAngleRadians
               }
-              gripperAngleRadians={sceneArms[0]?.gripperAngleRadians}
-              referenceJoints={
-                stage !== "review" && (stage === "reference" || showReference)
-                  ? referenceProjection.joints
-                  : null
-              }
-              referenceOpening={referenceProjection.opening}
             />
           )}
-          {stage !== "reference" && stage !== "review" && !view?.sweep_only ? (
-            <label className="reference-toggle">
-              <input
-                type="checkbox"
-                checked={showReference}
-                onChange={(event) => setShowReference(event.target.checked)}
-              />
-              Show reference pose
-            </label>
+          {stage === "reference" &&
+          view?.model_variant === "soft-gripper-camera" ? (
+            <p>Resting pose reference</p>
           ) : null}
-          {!view?.sweep_only && (
-            <p className="legend">
-              {stage !== "reference" ? (
-                <>
-                  <span className="measured-key" />
-                  Measured arm
-                </>
-              ) : null}
-              {stage !== "review" &&
-              (stage === "reference" || showReference) ? (
-                <>
-                  <span className="reference-key" />
-                  Reference pose
-                </>
-              ) : null}
-            </p>
-          )}
           {stage !== "reference" && view?.joints.length ? (
             <div className="joint-readings">
               <table>

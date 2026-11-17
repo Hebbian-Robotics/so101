@@ -12,7 +12,6 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Literal
-from xml.etree import ElementTree
 
 from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, model_validator
 
@@ -24,6 +23,8 @@ from .sweep_estimation import EncoderSweep, estimate_sweep
 MOTOR_NAMES = (*SO101_JOINT_NAMES, "gripper")
 RESOLUTION = 4096
 HOMING_STEPS = 2047
+HOME_JOINTS = [-0.0037, -1.8435, 1.5765, 1.3296, -1.5536]
+HOME_GRIPPER_RADIANS = -0.12105
 REFERENCE_JOINTS = [0.0] * 5
 REFERENCE_GRIPPER_RADIANS = 0.75
 CALIBRATION_REGISTERS = (
@@ -147,6 +148,7 @@ class Recording:
 class SweepRecording:
     sweeps: list[EncoderSweep]
     signs: list[int]
+    home_positions: list[int]
 
 
 @dataclass
@@ -281,39 +283,38 @@ class CalibrationSession:
         return positions
 
     def start_sweep(self) -> None:
-        """Start a read-only sweep without requiring a reference pose."""
+        """Capture the supported home pose and start a read-only sweep."""
         if isinstance(self.state, (Saved, Failed)):
             raise ValueError("Reconnect before creating a new draft")
         if self.setup.model_variant != "soft-gripper-camera":
             raise ValueError("Sweep-only calibration is not yet available for the stock gripper")
         positions = self.read_positions()
         signs: list[int] = [*self.setup.alignment.joint_signs, self.setup.alignment.gripper_sign]
-        self.state = SweepRecording([EncoderSweep.start(position) for position in positions], signs)
+        self.state = SweepRecording(
+            [EncoderSweep.start(position) for position in positions], signs, list(positions)
+        )
 
     def _finish_sweep_estimate(self) -> None:
         if not isinstance(self.state, SweepRecording):
             raise ValueError("Start a sweep before estimating calibration")
         self.view()
         recording = self.state
-        model = Path(__file__).parent / "assets/robot/so101/robot-soft-gripper-camera.urdf"
-        root = ElementTree.parse(model).getroot()
-        centers: list[float] = []
-        for name in SO101_JOINT_NAMES:
-            limit = root.find(f"joint[@name='{name}']/limit")
-            if limit is None:
-                raise ValueError(f"Model is missing limits for {name}")
-            centers.append((float(limit.attrib["lower"]) + float(limit.attrib["upper"])) / 2)
-        # Convex fingertip meshes first contact at this angle in the bundled
-        # soft-gripper CAD. The operator verifies the resulting visual alignment.
-        closed_angle = -0.12105
-        gripper_span = min(
-            recording.sweeps[5].maximum - recording.sweeps[5].minimum, RESOLUTION - 1
-        )
-        centers.append(closed_angle + gripper_span * math.tau / RESOLUTION / 2)
         estimates = [
-            estimate_sweep(sweep, old_homing, sign, center)
-            for sweep, old_homing, sign, center in zip(
-                recording.sweeps, self.original_homing, recording.signs, centers, strict=True
+            estimate_sweep(sweep, old_homing, sign, 0.0)
+            for sweep, old_homing, sign in zip(
+                recording.sweeps, self.original_homing, recording.signs, strict=True
+            )
+        ]
+        home_steps = [
+            rehomed_steps(position, old_homing, estimate.homing_offset)
+            for position, old_homing, estimate in zip(
+                recording.home_positions, self.original_homing, estimates, strict=True
+            )
+        ]
+        offsets = [
+            angle - joint_radians(position, sign, 0.0)
+            for angle, position, sign in zip(
+                [*HOME_JOINTS, HOME_GRIPPER_RADIANS], home_steps, recording.signs, strict=True
             )
         ]
         draft = DraftCalibration(
@@ -322,15 +323,15 @@ class CalibrationSession:
             [estimate.range_min for estimate in estimates],
             [estimate.range_max for estimate in estimates],
             list(recording.signs),
-            [estimate.model_offset_radians for estimate in estimates],
+            offsets,
             use_swept_wrist_limits=True,
         )
         draft.entries()
-        self.state = Review(
-            draft,
-            (closed_angle, closed_angle + gripper_span * math.tau / RESOLUTION),
-            estimated=True,
-        )
+        gripper_angles = [
+            joint_radians(position, draft.signs[5], draft.offsets[5])
+            for position in (draft.minimums[5], draft.maximums[5])
+        ]
+        self.state = Review(draft, (min(gripper_angles), max(gripper_angles)), estimated=True)
 
     def capture_reference(self) -> None:
         if isinstance(self.state, (Saved, Failed)):

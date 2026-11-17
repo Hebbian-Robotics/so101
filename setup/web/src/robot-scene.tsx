@@ -17,8 +17,6 @@ type SceneProps = {
   jointNames: string[];
   measuredJoints: (number | null)[];
   gripperAngleRadians?: number;
-  referenceJoints: number[] | null;
-  referenceOpening: number;
   cameraPosition: Position;
   cameraTarget: Position;
 };
@@ -52,21 +50,16 @@ function Models({ template, ...props }: SceneProps & { template: URDFRobot }) {
   const { invalidate } = useThree();
   const models = useMemo(() => {
     const measured = template.clone() as URDFRobot;
-    const reference = template.clone() as URDFRobot;
     // URDFLoader resets ignoreLimits when cloning joints. Calibration must
     // display the measured pose even outside the model's nominal limits.
-    for (const robot of [measured, reference]) {
-      for (const joint of Object.values(robot.joints))
-        joint.ignoreLimits = true;
-    }
+    for (const joint of Object.values(measured.joints))
+      joint.ignoreLimits = true;
     colorRobot(measured, 0x999999, 1);
-    colorRobot(reference, 0x087f8c, 0.4);
-    return { measured, reference };
+    return { measured };
   }, [template]);
   useEffect(
     () => () => {
       disposeRobotMaterials(models.measured);
-      disposeRobotMaterials(models.reference);
     },
     [models],
   );
@@ -81,30 +74,15 @@ function Models({ template, ...props }: SceneProps & { template: URDFRobot }) {
       null,
       props.gripperAngleRadians,
     );
-    models.reference.visible = props.referenceJoints !== null;
-    if (props.referenceJoints)
-      setRobotJoints(
-        models.reference,
-        props.jointNames,
-        props.referenceJoints,
-        props.referenceOpening,
-      );
     invalidate();
   }, [
     models,
     props.measuredJoints,
     props.jointNames,
     props.gripperAngleRadians,
-    props.referenceJoints,
-    props.referenceOpening,
     invalidate,
   ]);
-  return (
-    <>
-      <primitive object={models.measured} />
-      <primitive object={models.reference} />
-    </>
-  );
+  return <primitive object={models.measured} />;
 }
 
 export function RobotScene(props: SceneProps) {
