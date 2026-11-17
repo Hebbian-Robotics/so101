@@ -37,7 +37,9 @@ pnpm check      # Run all checks
 
 ```bash
 cargo install cargo-machete --version 0.9.2 --locked
+cargo install cargo-deny --version 0.20.2 --locked
 cargo machete --with-metadata --skip-target-dir runtime
+cargo deny --manifest-path runtime/Cargo.toml --config runtime/deny.toml --all-features --exclude-dev --locked check bans
 cargo clippy --manifest-path runtime/Cargo.toml --all-targets --all-features -- -D warnings
 cargo fmt --manifest-path runtime/Cargo.toml # Formatting
 ```
@@ -48,6 +50,7 @@ cargo fmt --manifest-path runtime/Cargo.toml # Formatting
 uv run --project setup ruff check --fix  # Linting with auto-fix
 uv run --project setup ruff format       # Code formatting
 uv run --project setup ty check          # Type checking
+uv run --project setup lint-imports --config setup/pyproject.toml
 ```
 
 ## Code Style & Philosophy

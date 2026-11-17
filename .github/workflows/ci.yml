@@ -71,6 +71,8 @@ jobs:
           cargo fmt --manifest-path runtime/Cargo.toml --check
           cargo install cargo-machete --version 0.9.2 --locked
           cargo machete --with-metadata --skip-target-dir runtime
+          cargo install cargo-deny --version 0.20.2 --locked
+          cargo deny --manifest-path runtime/Cargo.toml --config runtime/deny.toml --all-features --exclude-dev --locked check bans
           cargo clippy --manifest-path runtime/Cargo.toml --locked --all-targets --all-features -- -D warnings
       - name: Test runtime and documentation
         run: cargo test --manifest-path runtime/Cargo.toml --locked --all-features
@@ -100,6 +102,7 @@ jobs:
           uv run --project setup ruff check
           uv run --project setup ruff format --check
           uv run --project setup ty check
+          uv run --project setup lint-imports --config setup/pyproject.toml
           uv run --project setup pytest
           pnpm install --frozen-lockfile
           pnpm check
