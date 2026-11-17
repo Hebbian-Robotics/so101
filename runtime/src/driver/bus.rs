@@ -6,11 +6,9 @@ use std::time::{Duration, Instant};
 
 use anyhow::{Context, anyhow, bail, ensure};
 use hdrhistogram::Histogram;
-use rustypot::DynamixelProtocolHandler;
 use rustypot::bus::Bus;
 use rustypot::servo::feetech::sts3215::{DEFINITION, REGISTERS};
 use rustypot::servo::{Encoding, RegisterInfo};
-use serialport::SerialPort;
 
 use crate::telemetry::Reconnection;
 
@@ -172,11 +170,9 @@ type RustypotResult<T> = Result<T, Box<dyn std::error::Error>>;
 /// How often the port of a lost bus is opened again.
 pub(super) const RECONNECT_INTERVAL: Duration = Duration::from_secs(1);
 
-/// An open serial port: rustypot's bus over it, and the same port for the
-/// multi-register reads rustypot's `Bus` does not offer.
+/// An open serial port owned by rustypot's bus.
 struct Port {
     bus: Bus,
-    block_port: Box<dyn SerialPort>,
 }
 
 impl Port {
@@ -187,13 +183,9 @@ impl Port {
             .timeout(TIMEOUT)
             .open()
             .with_context(|| format!("Cannot open the Feetech bus {path}"))?;
-        let block_port = serial
-            .try_clone()
-            .with_context(|| format!("Cannot share the Feetech bus {path}"))?;
         let motors: BTreeMap<u8, _> = motor_ids.iter().map(|id| (*id, DEFINITION)).collect();
         Ok(Self {
             bus: Bus::new(serial, motors),
-            block_port,
         })
     }
 
@@ -232,7 +224,6 @@ pub struct SerialBus {
     /// None from a reconnection's start until it restores the bus.
     port: Option<Port>,
     attempt: Option<Attempt>,
-    protocol: DynamixelProtocolHandler,
     timing: BusTiming,
 }
 
@@ -245,7 +236,6 @@ impl SerialBus {
             motor_ids: motor_ids.to_vec(),
             port: Some(Port::open(path, motor_ids)?),
             attempt: None,
-            protocol: DynamixelProtocolHandler::v1(),
             timing: BusTiming::new(),
         })
     }
@@ -295,18 +285,12 @@ impl SerialBus {
 
 impl ServoBus for SerialBus {
     fn read_state_block(&mut self, ids: &[u8]) -> anyhow::Result<Vec<StateBlock>> {
-        let Some(Port { bus, block_port }) = self.port.as_mut() else {
+        let Some(Port { bus }) = self.port.as_mut() else {
             bail!("The Feetech bus {} is disconnected", self.path);
         };
-        let protocol = &self.protocol;
         let replies =
-            Self::timed_request(bus, &mut self.timing, READ_RETRIES, "state block", |_| {
-                protocol.sync_read_with_error(
-                    block_port.as_mut(),
-                    ids,
-                    STATE_BLOCK_ADDRESS,
-                    STATE_BLOCK_LENGTH,
-                )
+            Self::timed_request(bus, &mut self.timing, READ_RETRIES, "state block", |bus| {
+                bus.sync_read_raw_with_error(ids, STATE_BLOCK_ADDRESS, STATE_BLOCK_LENGTH)
             })?;
         replies
             .iter()

@@ -515,9 +515,9 @@ checksum = "cf54715a573b99ac80df0bc206da022bcd442c974952c7b9720069370852e21f"
 
 [[package]]
 name = "rustypot"
-version = "1.13.1"
+version = "1.14.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "4a077d7cfe6ad9aa970b863dabd53dafe116bd34b01a3dacd4883ba5e581683c"
+checksum = "ef97392bf1e5fde303502a9c5fc9a0610a7e7bc983fab35b39053768cf802faa"
 dependencies = [
  "clap",
  "env_logger",

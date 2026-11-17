@@ -11,6 +11,11 @@ imports no station, HTTP API, planner, policy runtime or robot-use client. The
 `schema` feature enables JSON Schema derives for consumers that need them; an
 ordinary hardware application does not need that feature.
 
+Live feedback uses rustypot’s `Bus::sync_read_raw_with_error` to read the
+contiguous STS3215 state block and preserve each motor’s packet alarm bits.
+All register operations share the bus’s single serial-port handle; retries and
+request timing remain in this runtime.
+
 ## Use
 
 A consumer supplies `config::FeetechConfig`, including the arm's calibration,

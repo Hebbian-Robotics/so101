@@ -16,7 +16,7 @@ schema = ["dep:schemars"]
 [dependencies]
 anyhow = "1.0.104"
 hdrhistogram = { version = "7.6.0", default-features = false }
-rustypot = "1.13.1"
+rustypot = "1.14.0"
 schemars = { version = "1", optional = true }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
