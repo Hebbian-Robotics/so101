@@ -16,7 +16,7 @@ Install [uv](https://docs.astral.sh/uv/getting-started/installation/) and use
 Python 3.12 or newer. Install the released tool and start it:
 
 ```sh
-uv tool install https://github.com/Hebbian-Robotics/so101/releases/download/v0.1.4/hebbian_so101_setup-0.1.4-py3-none-any.whl
+uv tool install https://github.com/Hebbian-Robotics/so101/releases/download/v0.1.5/hebbian_so101_setup-0.1.5-py3-none-any.whl
 so101-calibrate
 ```
 
