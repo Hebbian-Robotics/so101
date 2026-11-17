@@ -5,7 +5,9 @@ controller is selected automatically; choose one if several are connected.
 For the soft-gripper-and-camera assembly, support the disabled arm in the shown
 resting pose with the gripper closed, then start recording and gently sweep
 each joint through its safe travel, including wrist roll and gripper opening.
-Review and adjust the live model before saving. The home pose is an estimate,
+The tool flags unusually short sweeps so you can continue recording any missed
+joint. Never force a joint to satisfy the check. Review and adjust the live
+model before saving. The home pose is an estimate,
 so compare multiple positions. The stock-gripper variant uses its reference
 pose and explicit gripper endpoints.
 

@@ -25,6 +25,9 @@ RESOLUTION = 4096
 HOMING_STEPS = 2047
 HOME_JOINTS = [-0.0037, -1.8435, 1.5765, 1.3296, -1.5536]
 HOME_GRIPPER_RADIANS = -0.12105
+# Generous lower bounds based on the observed soft-gripper SO-101 assembly.
+# These detect a missed sweep, not physical or commanded joint limits.
+MINIMUM_SWEEP_DEGREES = (130, 130, 120, 130, 220, 75)
 REFERENCE_JOINTS = [0.0] * 5
 REFERENCE_GRIPPER_RADIANS = 0.75
 CALIBRATION_REGISTERS = (
@@ -301,6 +304,19 @@ class CalibrationSession:
             raise ValueError("Start a sweep before estimating calibration")
         self.view()
         recording = self.state
+        incomplete = [
+            f"{name.replace('_', ' ')}: {travel:.0f}° recorded (at least {minimum}° expected)"
+            for name, sweep, minimum in zip(
+                MOTOR_NAMES, recording.sweeps, MINIMUM_SWEEP_DEGREES, strict=True
+            )
+            if (travel := (sweep.maximum - sweep.minimum) * 360 / RESOLUTION) < minimum
+        ]
+        if incomplete:
+            raise ValueError(
+                "Incomplete sweep — "
+                + "; ".join(incomplete)
+                + ". Gently sweep the listed joints further, then finish again; do not force the arm."
+            )
         estimates = [
             estimate_sweep(sweep, old_homing, sign, 0.0)
             for sweep, old_homing, sign in zip(

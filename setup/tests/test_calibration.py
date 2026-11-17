@@ -17,6 +17,7 @@ from so101_setup.calibration import (
     Reference,
     Review,
     Saved,
+    SweepRecording,
     joint_radians,
     read_calibration,
 )
@@ -277,10 +278,12 @@ def test_sweep_estimates_wrapped_wrist_and_gripper_without_writing_registers(
     bus.registers["present_position"][5] = 1800
     session.start_sweep()
     for wrist in (1500, 900, 300, 3796, 3196, 2596, 2296):
-        bus.registers["present_position"] = [1800, 1800, 1800, 1800, wrist, 1800]
+        bus.registers["present_position"] = [900, 900, 900, 900, wrist, 1800]
         session.view()
+    bus.registers["present_position"] = [2047, 2047, 2047, 2047, 2296, 2500]
+    session.view()
     for wrist in (2896, 3496, 0, 600, 1200, 1800, 2047):
-        bus.registers["present_position"] = [2300, 2300, 2300, 2300, wrist, 2300]
+        bus.registers["present_position"] = [3200, 3200, 3200, 3200, wrist, 3200]
         session.view()
     session.finish_sweep()
     assert isinstance(session.state, Review)
@@ -309,10 +312,9 @@ def test_saved_calibration_can_be_adjusted_without_losing_wrist_limits(tmp_path:
     bus = MemoryServoBus()
     session = session_at(tmp_path, bus, "soft-gripper-camera")
     session.start_sweep()
-    bus.registers["present_position"] = [1700] * 6
-    session.view()
-    bus.registers["present_position"] = [2400] * 6
-    session.view()
+    for position in (600, 2000, 3400):
+        bus.registers["present_position"] = [position] * 6
+        session.view()
     session.finish_sweep()
     session.save(model_verified=True)
     saved = read_calibration(session.directory / "calibration.json")
@@ -324,3 +326,21 @@ def test_saved_calibration_can_be_adjusted_without_losing_wrist_limits(tmp_path:
     assert reopened.state.draft.offsets[1] == pytest.approx(
         saved_setup.alignment.joint_offsets_radians[1] + 0.01
     )
+
+
+def test_incomplete_gripper_sweep_can_be_completed_before_review(tmp_path: Path) -> None:
+    bus = MemoryServoBus()
+    session = session_at(tmp_path, bus, "soft-gripper-camera")
+    session.start_sweep()
+    for position in (600, 2000, 3400):
+        bus.registers["present_position"] = [position] * 5 + [2047]
+        session.view()
+    with pytest.raises(ValueError, match="gripper: 0° recorded"):
+        session.finish_sweep()
+    assert isinstance(session.state, SweepRecording)
+    assert bus.writes == []
+    bus.registers["present_position"][5] = 3400
+    session.view()
+    session.finish_sweep()
+    assert isinstance(session.state, Review)
+    assert bus.writes == []
