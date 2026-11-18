@@ -42,12 +42,27 @@ files/registers, writes and verifies calibration/settings with torque off, then
 releases the port. If save fails, reconcile the recorded backup before control.
 The tool never enables torque or sends position goals.
 
-`ArmSetup` holds serial identity, model alignment, gripper endpoints and expected
-servo settings. `NativeSetupStore` writes `arms/<serial>/setup.toml` and
+`ArmSetup` holds serial identity, motor ID order, model alignment, gripper
+endpoints and expected servo settings. `NativeSetupStore` writes `arms/<serial>/setup.toml` and
 LeRobot-compatible `calibration.json`. Applications can implement `SetupStore`
 for their own format; config retrieval and Git operations remain with callers.
 The default store is `$SO101_SETUP_DIRECTORY`, otherwise
 `$XDG_CONFIG_HOME/so101-setup` (defaulting to `~/.config/so101-setup`).
+
+Motor IDs may run from `1` to `6` or from `6` to `1` from the base to the
+gripper. The default is ascending. To calibrate an arm with descending IDs,
+use the USB serial shown in the calibration tool:
+
+```sh
+so101-calibrate --serial ARM_A --motor-id-order descending
+```
+
+For an arm with a saved order, omit both options to reuse it. To change the order
+back, use `--motor-id-order ascending` with the serial and record a fresh
+calibration. During live review, move shoulder pan and the gripper separately
+by hand with torque off. Confirm that each moves its matching joint in the
+preview before saving. Save records `motor_id_order` in `setup.toml` and leaves
+the programmed servo IDs intact.
 
 The default model is `"stock"`. For a new arm with the optional TPU gripper and
 wrist camera assembly, start with `so101-calibrate --model-variant soft-gripper-camera`.

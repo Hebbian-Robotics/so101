@@ -27,7 +27,7 @@ from .calibration import (
     JointView,
     Reference,
 )
-from .configuration import ModelVariant
+from .configuration import ModelVariant, MotorIdOrder
 from .device import RegisterBus
 from .discovery import ControllerChoice, discover_controllers
 from .motor_ids import FOLLOWER_MOTORS, program_motor_id, programming_ports
@@ -116,10 +116,13 @@ class CalibrationApplication:
         calibration_root: Path,
         store: SetupStore | None = None,
         saved_command: Callable[[str], str] | None = None,
+        *,
+        motor_id_order_override: tuple[str, MotorIdOrder] | None = None,
     ) -> None:
         self.config_directory = config_directory.resolve()
         self.store = NativeSetupStore() if store is None else store
         self.saved_command = saved_command
+        self.motor_id_order_override = motor_id_order_override
         self.calibration_root = calibration_root
         self.session: CalibrationSession | None = None
         self.auto_connect = True
@@ -168,7 +171,11 @@ class CalibrationApplication:
             self.stream_stop.wait(0.2)
 
     def controllers(self) -> list[ControllerChoice]:
-        return discover_controllers(self.config_directory, self.store)
+        controllers = discover_controllers(self.config_directory, self.store)
+        if self.motor_id_order_override is None:
+            return controllers
+        override_serial, _ = self.motor_id_order_override
+        return [controller for controller in controllers if controller.serial == override_serial]
 
     def connect(self, serial: str) -> None:
         if self.session is not None:
@@ -181,7 +188,10 @@ class CalibrationApplication:
         controller = candidates[0]
         directory = self.config_directory / "arms" / serial
         setup = self.store.load(directory, serial)
-        bus = RegisterBus(controller.port)
+        if self.motor_id_order_override is not None:
+            _, motor_id_order = self.motor_id_order_override
+            setup = setup.model_copy(update={"motor_id_order": motor_id_order})
+        bus = RegisterBus(controller.port, setup.motor_ids_in_joint_order())
         try:
             self.session = CalibrationSession(
                 setup, directory, self.calibration_root, bus, self.store
@@ -519,13 +529,25 @@ def command_line() -> None:
         default="stock",
         help="Model for new arm entries; existing setup files keep their model.",
     )
+    parser.add_argument("--serial", help="USB serial of the arm whose motor ID order is being set")
+    parser.add_argument(
+        "--motor-id-order",
+        choices=("ascending", "descending"),
+        help="Motor IDs from base to gripper for the selected serial. Saved after calibration.",
+    )
     parser.add_argument("--assets", type=Path, default=asset_directory())
     parser.add_argument("--port", type=int, default=8795)
     arguments = parser.parse_args()
+    if (arguments.serial is None) != (arguments.motor_id_order is None):
+        parser.error("--serial and --motor-id-order must be used together")
+    motor_id_order_override = (
+        (arguments.serial, arguments.motor_id_order) if arguments.serial is not None else None
+    )
     application = CalibrationApplication(
         arguments.setup_directory,
         calibration_root(),
         NativeSetupStore(arguments.model_variant),
+        motor_id_order_override=motor_id_order_override,
     )
     serve_application(application, arguments.assets, arguments.port, setup_lock())
 

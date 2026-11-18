@@ -29,8 +29,8 @@ from so101_setup.storage import NativeSetupStore
 class MemoryServoBus(RegisterBus):
     """An arm's registers at the serial boundary; no third-party behavior mocked."""
 
-    def __init__(self) -> None:
-        self.driven_motor_ids = [1, 2, 3, 4, 5, 6]
+    def __init__(self, motor_ids: list[int] | None = None) -> None:
+        self.driven_motor_ids = [1, 2, 3, 4, 5, 6] if motor_ids is None else motor_ids
         self.all_motor_ids = self.driven_motor_ids
         self.definition = rustypot.Sts3215PyController.definition()
         self.registers = {
@@ -54,7 +54,8 @@ class MemoryServoBus(RegisterBus):
     def read_registers(self, name: str, motor_ids: list[int] | None = None) -> list[int]:
         if name == "present_position" and self.pending_positions:
             self.registers[name] = self.pending_positions.pop(0)
-        return list(self.registers[name])
+        ids = self.driven_motor_ids if motor_ids is None else motor_ids
+        return [self.registers[name][motor_id - 1] for motor_id in ids]
 
     def write_acknowledged(self, motor_id: int, register: str, value: int) -> None:
         self.writes.append((motor_id, register, value))
@@ -347,3 +348,33 @@ def test_incomplete_gripper_sweep_can_be_completed_before_review(tmp_path: Path)
     session.finish_sweep()
     assert isinstance(session.state, Review)
     assert bus.writes == []
+
+
+def test_reverse_calibration_writes_physical_joint_ranges_and_reopens(tmp_path: Path) -> None:
+    bus = MemoryServoBus([6, 5, 4, 3, 2, 1])
+    setup = ArmSetup(serial="ARM_A", motor_id_order="descending")
+    directory = tmp_path / "arms/ARM_A"
+    session = CalibrationSession(setup, directory, tmp_path / "live", bus)
+    session.capture_reference()
+    bus.registers["present_position"] = [1750, 1760, 1770, 1780, 1790, 1800]
+    session.view()
+    session.capture_gripper_endpoint("closed")
+    bus.registers["present_position"] = [2250, 2260, 2270, 2280, 2290, 2300]
+    session.view()
+    session.capture_gripper_endpoint("open")
+    session.finish_sweep()
+    session.save(model_verified=True)
+
+    saved_setup = NativeSetupStore().load(directory, "ARM_A")
+    assert saved_setup.motor_id_order == "descending"
+    calibration_path = directory / "calibration.json"
+    entries = read_calibration(calibration_path, [6, 5, 4, 3, 2, 1])
+    assert (entries["shoulder_pan"].id, entries["shoulder_pan"].range_min) == (6, 1800)
+    assert (entries["gripper"].id, entries["gripper"].range_min) == (1, 1750)
+    assert bus.registers["min_position_limit"] == [1750, 0, 1770, 1780, 1790, 1800]
+
+    reopened = CalibrationSession(saved_setup, directory, tmp_path / "live", bus)
+    assert isinstance(reopened.state, Review)
+    bus.driven_motor_ids = bus.all_motor_ids = [1, 2, 3, 4, 5, 6]
+    changed_order = CalibrationSession(ArmSetup(serial="ARM_A"), directory, tmp_path / "live", bus)
+    assert isinstance(changed_order.state, Reference)

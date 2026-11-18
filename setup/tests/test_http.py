@@ -32,16 +32,18 @@ def test_api_requires_session_authorization_and_static_requests_stay_inside_asse
                 ("GET", "/api/events", None, 401),
                 ("POST", "/api/action", '{"action":"capture_reference"}', 403),
                 ("GET", "/../private.txt", None, 404),
-                ("GET", "/", None, 200),
             ]:
                 connection.request(method, path, body)
                 response = connection.getresponse()
                 assert response.status == expected
-                if path == "/":
-                    cookie_header = response.getheader("Set-Cookie")
-                    assert cookie_header is not None
-                    session_cookie = cookie_header.split(";", 1)[0]
                 assert b"Private config" not in response.read()
+            connection.request("GET", "/")
+            response = connection.getresponse()
+            assert response.status == 200
+            cookie_header = response.getheader("Set-Cookie")
+            assert cookie_header is not None
+            session_cookie = cookie_header.split(";", 1)[0]
+            response.read()
             connection.request("GET", "/api/state", headers={"Cookie": session_cookie})
             response = connection.getresponse()
             # USB access may be busy when the real calibrator is running.

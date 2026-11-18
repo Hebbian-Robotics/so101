@@ -1,5 +1,7 @@
 //! Native SO-101 setup file types shared by control applications.
 
+use crate::SO101_JOINT_NAMES;
+use crate::calibration::LerobotMotorCalibration;
 use crate::settings::Sign;
 use anyhow::{Context, ensure};
 use serde::Deserialize;
@@ -14,12 +16,32 @@ pub enum ModelVariant {
     SoftGripperCamera,
 }
 
+#[derive(Clone, Copy, Default, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum MotorIdOrder {
+    #[default]
+    Ascending,
+    Descending,
+}
+
+impl MotorIdOrder {
+    #[must_use]
+    pub fn motor_ids_in_joint_order(self) -> ([u8; 5], u8) {
+        match self {
+            Self::Ascending => ([1, 2, 3, 4, 5], 6),
+            Self::Descending => ([6, 5, 4, 3, 2], 1),
+        }
+    }
+}
+
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ArmSetup {
     pub serial: String,
     #[serde(default)]
     pub model_variant: ModelVariant,
+    #[serde(default)]
+    pub motor_id_order: MotorIdOrder,
     #[serde(default)]
     pub alignment: Alignment,
     #[serde(default)]
@@ -120,5 +142,34 @@ impl ArmSetup {
             "Gain overrides must name an SO-101 motor (IDs 1-6)"
         );
         Ok(setup)
+    }
+}
+
+impl MotorIdOrder {
+    /// Check that the named calibration entries agree with the physical joint order.
+    ///
+    /// # Errors
+    /// The file cannot be read or the named entries do not match this order.
+    pub fn validate_calibration_mapping(self, path: &Path) -> anyhow::Result<()> {
+        let entries: BTreeMap<String, LerobotMotorCalibration> =
+            serde_json::from_slice(&std::fs::read(path)?)
+                .with_context(|| format!("Invalid SO-101 calibration {}", path.display()))?;
+        let joint_names = SO101_JOINT_NAMES.into_iter().chain(["gripper"]);
+        // Older ascending setups could use calibration keys with only bus-level meaning.
+        if matches!(self, Self::Ascending)
+            && !joint_names.clone().any(|name| entries.contains_key(name))
+        {
+            return Ok(());
+        }
+        let (joint_ids, gripper_id) = self.motor_ids_in_joint_order();
+        ensure!(
+            entries.len() == 6
+                && joint_names
+                    .zip(joint_ids.into_iter().chain([gripper_id]))
+                    .all(|(name, id)| entries.get(name).is_some_and(|entry| entry.id == id)),
+            "Calibration {} does not match the setup's motor ID order; recalibrate the arm",
+            path.display()
+        );
+        Ok(())
     }
 }

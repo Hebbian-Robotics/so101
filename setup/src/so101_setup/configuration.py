@@ -17,6 +17,7 @@ SO101_JOINT_NAMES = [
 ]
 MOTOR_IDS = [1, 2, 3, 4, 5, 6]
 ModelVariant = Literal["stock", "soft-gripper-camera"]
+MotorIdOrder = Literal["ascending", "descending"]
 
 
 class SetupSection(BaseModel):
@@ -63,9 +64,13 @@ class ServoSettings(SetupSection):
 class ArmSetup(SetupSection):
     serial: ControllerSerial
     model_variant: ModelVariant = "stock"
+    motor_id_order: MotorIdOrder = "ascending"
     alignment: ModelAlignment = Field(default_factory=ModelAlignment)
     gripper: GripperEndpoints = Field(default_factory=GripperEndpoints)
     servos: ServoSettings = Field(default_factory=ServoSettings)
+
+    def motor_ids_in_joint_order(self) -> list[int]:
+        return list(MOTOR_IDS) if self.motor_id_order == "ascending" else MOTOR_IDS[::-1]
 
     @model_validator(mode="after")
     def require_known_gain_overrides(self) -> Self:

@@ -62,13 +62,15 @@ Calibration = dict[str, MotorCalibration]
 CALIBRATION_ADAPTER = TypeAdapter(Calibration)
 
 
-def read_calibration(path: Path) -> Calibration:
+def read_calibration(path: Path, motor_ids: list[int] = MOTOR_IDS) -> Calibration:
     calibration = CALIBRATION_ADAPTER.validate_json(path.read_bytes())
     if set(calibration) != set(MOTOR_NAMES) or any(
         calibration[name].id != motor_id
-        for name, motor_id in zip(MOTOR_NAMES, MOTOR_IDS, strict=True)
+        for name, motor_id in zip(MOTOR_NAMES, motor_ids, strict=True)
     ):
-        raise ValueError("Calibration must name the six SO-101 motors with IDs 1-6")
+        raise ValueError(
+            "Calibration joint IDs do not match the selected motor ID order. Capture a new calibration."
+        )
     return calibration
 
 
@@ -119,7 +121,7 @@ class DraftCalibration:
             self.minimums[index] = min(self.minimums[index], position)
             self.maximums[index] = max(self.maximums[index], position)
 
-    def entries(self) -> Calibration:
+    def entries(self, motor_ids: list[int] = MOTOR_IDS) -> Calibration:
         return {
             name: MotorCalibration(
                 id=motor_id,
@@ -131,7 +133,7 @@ class DraftCalibration:
                 if name == "wrist_roll" and not self.use_swept_wrist_limits
                 else self.maximums[index],
             )
-            for index, (name, motor_id) in enumerate(zip(MOTOR_NAMES, MOTOR_IDS, strict=True))
+            for index, (name, motor_id) in enumerate(zip(MOTOR_NAMES, motor_ids, strict=True))
         }
 
 
@@ -229,8 +231,9 @@ class CalibrationSession:
         return self.setup.serial
 
     def __post_init__(self) -> None:
-        if self.bus.driven_motor_ids != MOTOR_IDS or self.bus.all_motor_ids != MOTOR_IDS:
-            raise ValueError("Calibrator requires the standard SO-101 motor layout (IDs 1-6)")
+        expected_ids = self.setup.motor_ids_in_joint_order()
+        if self.bus.driven_motor_ids != expected_ids or self.bus.all_motor_ids != expected_ids:
+            raise ValueError("Calibration bus IDs must match the selected SO-101 motor order")
         self.require_torque_off()
         self.original_homing = self.bus.read_registers("homing_offset")
         self.state = self.initial_state()
@@ -241,7 +244,7 @@ class CalibrationSession:
         if not calibration_path.exists():
             return Reference()
         try:
-            entries = read_calibration(calibration_path)
+            entries = read_calibration(calibration_path, self.bus.driven_motor_ids)
         except (ValueError, OSError) as error:
             return Reference(f"Saved calibration could not be reused: {error}")
         minimums = self.bus.read_registers("min_position_limit")
@@ -344,7 +347,7 @@ class CalibrationSession:
             offsets,
             use_swept_wrist_limits=True,
         )
-        draft.entries()
+        draft.entries(self.bus.driven_motor_ids)
         gripper_angles = [
             joint_radians(position, draft.signs[5], draft.offsets[5])
             for position in (draft.minimums[5], draft.maximums[5])
@@ -434,7 +437,7 @@ class CalibrationSession:
             raise ValueError("Capture a reference pose before recording travel")
         self.view()
         # MotorCalibration checks that every swept joint/gripper has moved.
-        self.state.draft.entries()
+        self.state.draft.entries(self.bus.driven_motor_ids)
         draft = self.state.draft
         closed_steps = self.state.closed_gripper_steps
         open_steps = self.state.open_gripper_steps
@@ -540,13 +543,14 @@ class CalibrationSession:
             raise ValueError("Review the live model and confirm it matches before saving")
         self.read_positions()
         draft = self.state.draft
-        entries = draft.entries()
+        entries = draft.entries(self.bus.driven_motor_ids)
         calibration_bytes = CALIBRATION_ADAPTER.dump_json(entries, indent=2)
         configuration_path = self.store.configuration_path(self.directory)
         result = ArmSetup.model_validate(
             {
                 "serial": self.serial,
                 "model_variant": self.setup.model_variant,
+                "motor_id_order": self.setup.motor_id_order,
                 "alignment": {
                     "joint_signs": draft.signs[:5],
                     "joint_offsets_radians": draft.offsets[:5],
@@ -574,7 +578,10 @@ class CalibrationSession:
         registers = {
             register: self.bus.read_registers(register) for register in CALIBRATION_REGISTERS
         }
-        atomic_write(backup / "registers.json", json.dumps(registers, indent=2).encode())
+        atomic_write(
+            backup / "registers.json",
+            json.dumps({"motor_ids": self.bus.driven_motor_ids, **registers}, indent=2).encode(),
+        )
         try:
             self.require_torque_off()
             updates = {
@@ -585,12 +592,12 @@ class CalibrationSession:
             }
             if self.setup.servos.expected_return_delay_time is not None:
                 updates["return_delay_time"] = [self.setup.servos.expected_return_delay_time] * 6
-            for motor_id, locked in zip(MOTOR_IDS, registers["lock"], strict=True):
+            for motor_id, locked in zip(self.bus.driven_motor_ids, registers["lock"], strict=True):
                 if locked:
                     self.bus.write_acknowledged(motor_id, "lock", 0)
             for register, desired in updates.items():
                 for motor_id, current, value in zip(
-                    MOTOR_IDS, registers[register], desired, strict=True
+                    self.bus.driven_motor_ids, registers[register], desired, strict=True
                 ):
                     if current != value:
                         self.bus.write_acknowledged(motor_id, register, value)
