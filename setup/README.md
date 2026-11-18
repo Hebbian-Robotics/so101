@@ -9,8 +9,19 @@ pnpm build
 uv run --project setup so101-calibrate
 ```
 
-Open the local URL it prints. A single connected USB
-controller is selected automatically; choose one if several are connected.
+Open the local URL it prints. Use the sidebar to choose **Calibrate arm** or
+**Program motor IDs**.
+
+To prepare loose STS3215 servos for a follower, open **Program motor IDs**.
+Choose **New follower batch** to program IDs 1–6 in order or **Single replacement**
+to select a joint and its ID directly. Disconnect any active calibration session
+first. Turn off servo power before connecting or swapping motors, and connect
+only the loose servo being programmed. The tool reads back the ID at 1 Mbps
+before marking it verified. Label each motor with its verified joint and ID,
+then install and daisy chain the motors during assembly.
+
+Open **Calibrate arm** after assembly and select its USB controller. On a fresh
+launch, the calibration page selects a single connected controller automatically.
 For the soft-gripper-and-camera assembly, support the disabled arm in the shown
 resting pose with the gripper closed, then start recording and gently sweep
 each joint through its safe travel, including wrist roll and gripper opening.

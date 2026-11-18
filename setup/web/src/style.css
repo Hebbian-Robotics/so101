@@ -362,3 +362,102 @@ pre {
   border-radius: 5px;
   padding: 8px;
 }
+
+.setup-layout {
+  display: grid;
+  grid-template-columns: 11rem minmax(0, 1fr);
+  align-items: start;
+  gap: 24px;
+}
+
+.setup-navigation {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.setup-navigation a {
+  color: var(--link);
+  padding: 10px 12px;
+  border-inline-start: 3px solid transparent;
+  border-radius: 4px;
+  text-decoration: none;
+}
+
+.setup-navigation a:hover {
+  background: var(--hover);
+}
+
+.setup-navigation a[aria-current="page"] {
+  border-inline-start-color: currentColor;
+  background: var(--panel);
+  font-weight: 600;
+}
+
+.setup-navigation a:focus-visible {
+  outline: 3px solid var(--focus);
+  outline-offset: 2px;
+}
+
+.motor-workspace {
+  grid-template-columns: minmax(0, 1.4fr) minmax(0, 1fr);
+}
+
+.motor-workspace fieldset {
+  margin: 0 0 18px;
+  border: 1px solid var(--border);
+  border-radius: 5px;
+}
+
+.motor-workspace fieldset label,
+.motor-confirmation {
+  display: block;
+  margin-block: 8px;
+}
+
+.motor-field {
+  display: grid;
+  gap: 6px;
+  margin-block: 12px;
+}
+
+.motor-field select {
+  min-width: 0;
+  padding: 8px;
+}
+
+.motor-checklist {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.motor-checklist li {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 10px;
+  border-block-end: 1px solid var(--border);
+}
+
+.motor-checklist li[aria-current="step"] {
+  background: var(--subtle);
+  font-weight: 600;
+}
+
+@media (max-width: 1100px) {
+  .setup-layout {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .setup-navigation {
+    flex-direction: row;
+    flex-wrap: wrap;
+  }
+}
+
+@media (max-width: 780px) {
+  .motor-workspace {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}

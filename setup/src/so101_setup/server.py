@@ -30,12 +30,19 @@ from .calibration import (
 from .configuration import ModelVariant
 from .device import RegisterBus
 from .discovery import ControllerChoice, discover_controllers
+from .motor_ids import FOLLOWER_MOTORS, program_motor_id, programming_ports
 from .runtime import asset_directory, setup_directory, setup_lock
 from .storage import NativeSetupStore, SetupStore
 
 
 class ActionModel(BaseModel):
     model_config = ConfigDict(extra="forbid")
+
+
+class ProgramMotorAction(ActionModel):
+    port: str = Field(min_length=1)
+    motor_id: int = Field(ge=1, le=6, strict=True)
+    isolated_motor: Literal[True]
 
 
 class ConnectAction(ActionModel):
@@ -239,6 +246,17 @@ class CalibrationApplication:
                         self.session.save(model_verified=verified)
             return self.view()
 
+    def program_motor(self, action: ProgramMotorAction) -> int:
+        with self.lock:
+            if self.session is not None:
+                raise ValueError("Open Calibrate arm and disconnect the arm first.")
+            if action.port not in {controller.port for controller in programming_ports()}:
+                raise ValueError(
+                    "The selected USB adapter is unavailable. Refresh the adapter list."
+                )
+            self.auto_connect = False
+            return program_motor_id(action.port, action.motor_id)
+
     def close(self) -> None:
         self.stream_stop.set()
         with self.stream_condition:
@@ -338,6 +356,20 @@ class CalibrationRequestHandler(BaseHTTPRequestHandler):
                 return
             self.stream_events()
             return
+        if path == "/api/motor-ids":
+            if not self.authenticated():
+                self.reply(HTTPStatus.UNAUTHORIZED, b"{}")
+                return
+            self.reply(
+                HTTPStatus.OK,
+                json.dumps(
+                    {
+                        "motors": [motor.model_dump() for motor in FOLLOWER_MOTORS],
+                        "ports": [port.model_dump() for port in programming_ports()],
+                    }
+                ).encode(),
+            )
+            return
         if path == "/api/state":
             if not self.authenticated():
                 self.reply(
@@ -354,7 +386,7 @@ class CalibrationRequestHandler(BaseHTTPRequestHandler):
                 )
             return
         requested = (self.asset_directory / unquote(path).lstrip("/")).resolve()
-        if path == "/":
+        if path in {"/", "/motor-ids"}:
             requested = self.asset_directory / "index.html"
         if not requested.is_relative_to(self.asset_directory) or not requested.is_file():
             self.reply(HTTPStatus.NOT_FOUND, b"Not found", "text/plain")
@@ -363,7 +395,7 @@ class CalibrationRequestHandler(BaseHTTPRequestHandler):
             HTTPStatus.OK,
             requested.read_bytes(),
             mimetypes.guess_type(requested.name)[0] or "application/octet-stream",
-            set_session=path == "/",
+            set_session=path in {"/", "/motor-ids"},
         )
 
     def stream_events(self) -> None:
@@ -403,7 +435,8 @@ class CalibrationRequestHandler(BaseHTTPRequestHandler):
         ):
             self.reply(HTTPStatus.FORBIDDEN, b"{}")
             return
-        if urlsplit(self.path).path != "/api/action":
+        path = urlsplit(self.path).path
+        if path not in {"/api/action", "/api/motor-ids"}:
             self.reply(HTTPStatus.NOT_FOUND, b"{}")
             return
         if not self.authenticated():
@@ -413,8 +446,15 @@ class CalibrationRequestHandler(BaseHTTPRequestHandler):
             length = int(self.headers.get("Content-Length", "0"))
             if not 0 < length <= 4096:
                 raise ValueError("Action body must be 1-4096 bytes")
-            action = ACTION_ADAPTER.validate_json(self.rfile.read(length))
-            self.reply(HTTPStatus.OK, self.application.act(action).model_dump_json().encode())
+            body = self.rfile.read(length)
+            if path == "/api/motor-ids":
+                motor_id = self.application.program_motor(
+                    ProgramMotorAction.model_validate_json(body)
+                )
+                self.reply(HTTPStatus.OK, json.dumps({"motor_id": motor_id}).encode())
+            else:
+                action = ACTION_ADAPTER.validate_json(body)
+                self.reply(HTTPStatus.OK, self.application.act(action).model_dump_json().encode())
         except Exception as error:
             self.reply(HTTPStatus.BAD_REQUEST, json.dumps({"message": str(error)}).encode())
 
