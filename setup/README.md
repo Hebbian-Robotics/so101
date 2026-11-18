@@ -13,9 +13,11 @@ Open the local URL it prints. Use the sidebar to choose **Calibrate arm** or
 **Program motor IDs**.
 
 To prepare loose STS3215 servos for a follower, open **Program motor IDs**.
-Choose **New follower batch** to program IDs 1–6 in order or **Single replacement**
-to select a joint and its ID directly. Disconnect any active calibration session
-first. Turn off servo power before connecting or swapping motors, and connect
+Choose **New follower batch** to program IDs 1–6 in order, skipping motors you
+do not need. The checklist distinguishes skipped motors from verified ones.
+Choose **Program one ID** to program any number of motors with the same joint ID;
+the last successfully programmed ID is remembered on this browser. Disconnect
+any active calibration session first. Turn off servo power before connecting or swapping motors, and connect
 only the loose servo being programmed. The tool reads back the ID at 1 Mbps
 before marking it verified. Label each motor with its verified joint and ID,
 then install and daisy chain the motors during assembly.

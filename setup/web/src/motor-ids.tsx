@@ -9,6 +9,30 @@ const programmingOptionsSchema = z.object({
 });
 type ProgrammingOptions = z.infer<typeof programmingOptionsSchema>;
 type FollowerMotor = ProgrammingOptions["motors"][number];
+type BatchResult = "verified" | "skipped";
+
+const lastProgrammedMotorIdKey = "so101-last-programmed-motor-id";
+
+function readLastProgrammedMotorId(): number | undefined {
+  try {
+    const stored = window.localStorage.getItem(lastProgrammedMotorIdKey);
+    if (stored === null) return undefined;
+    const motorId = Number(stored);
+    return Number.isInteger(motorId) && motorId >= 1 && motorId <= 6
+      ? motorId
+      : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function rememberProgrammedMotorId(motorId: number): void {
+  try {
+    window.localStorage.setItem(lastProgrammedMotorIdKey, String(motorId));
+  } catch {
+    // The current selection remains available even if browser storage is disabled.
+  }
+}
 
 function motorLabel(motor: FollowerMotor) {
   const joint = motor.joint.replaceAll("_", " ");
@@ -43,9 +67,10 @@ function errorMessage(error: unknown) {
 export function MotorIds() {
   const [options, setOptions] = useState<ProgrammingOptions>();
   const [selectedPort, setSelectedPort] = useState("");
-  const [mode, setMode] = useState<"batch" | "replacement">("batch");
-  const [batchCount, setBatchCount] = useState(0);
-  const [replacementId, setReplacementId] = useState<number>();
+  const [mode, setMode] = useState<"batch" | "single">("batch");
+  const [batchResults, setBatchResults] = useState<BatchResult[]>([]);
+  const [singleMotorId, setSingleMotorId] = useState(readLastProgrammedMotorId);
+  const batchCount = batchResults.length;
   const [verifiedId, setVerifiedId] = useState<number>();
   const [isolated, setIsolated] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -72,7 +97,7 @@ export function MotorIds() {
   const target =
     mode === "batch"
       ? options?.motors[batchCount]
-      : options?.motors.find((motor) => motor.id === replacementId);
+      : options?.motors.find((motor) => motor.id === singleMotorId);
 
   function clearResult() {
     setIsolated(false);
@@ -96,6 +121,10 @@ export function MotorIds() {
       if (result.motor_id !== target.id)
         throw new Error("Unexpected motor ID returned.");
       setVerifiedId(result.motor_id);
+      if (mode === "single") {
+        rememberProgrammedMotorId(result.motor_id);
+        setSingleMotorId(result.motor_id);
+      }
     } catch (error) {
       setError(errorMessage(error));
     } finally {
@@ -124,23 +153,31 @@ export function MotorIds() {
             <input
               type="radio"
               name="job"
-              checked={mode === "replacement"}
+              checked={mode === "single"}
               onChange={() => {
-                setMode("replacement");
+                setMode("single");
                 clearResult();
               }}
             />
-            Single replacement
+            Program one ID
           </label>
         </fieldset>
         {mode === "batch" && options && batchCount === options.motors.length ? (
           <>
-            <h2>All six motors verified</h2>
-            <p>The labeled motors are ready for assembly.</p>
+            <h2>Batch complete</h2>
+            <p role="status">
+              {batchResults.filter((result) => result === "verified").length}{" "}
+              verified,{" "}
+              {batchResults.filter((result) => result === "skipped").length}{" "}
+              skipped.
+            </p>
+            <p>
+              Only motors marked verified have been programmed in this batch.
+            </p>
             <button
               type="button"
               onClick={() => {
-                setBatchCount(0);
+                setBatchResults([]);
                 clearResult();
               }}
             >
@@ -149,14 +186,14 @@ export function MotorIds() {
           </>
         ) : (
           <>
-            {mode === "replacement" && (
+            {mode === "single" && (
               <label className="motor-field">
                 Follower joint
                 <select
                   disabled={busy}
-                  value={replacementId ?? ""}
+                  value={singleMotorId ?? ""}
                   onChange={(event) => {
-                    setReplacementId(Number(event.target.value));
+                    setSingleMotorId(Number(event.target.value));
                     clearResult();
                   }}
                 >
@@ -235,6 +272,18 @@ export function MotorIds() {
                 </button>
               </>
             )}
+            {mode === "batch" && target && verifiedId === undefined && (
+              <button
+                type="button"
+                disabled={busy}
+                onClick={() => {
+                  setBatchResults((results) => [...results, "skipped"]);
+                  clearResult();
+                }}
+              >
+                Skip {motorLabel(target)}
+              </button>
+            )}
             {target && verifiedId === target.id && (
               <>
                 <p role="status">
@@ -244,13 +293,13 @@ export function MotorIds() {
                 <button
                   type="button"
                   onClick={() => {
-                    if (mode === "batch") setBatchCount(batchCount + 1);
-                    else setReplacementId(undefined);
+                    if (mode === "batch")
+                      setBatchResults((results) => [...results, "verified"]);
                     clearResult();
                   }}
                 >
-                  {mode === "replacement"
-                    ? "Done"
+                  {mode === "single"
+                    ? `Program another ID ${target.id}`
                     : batchCount === 5
                       ? "Finish batch"
                       : "Next motor"}
@@ -274,8 +323,10 @@ export function MotorIds() {
               aria-current={target?.id === motor.id ? "step" : undefined}
             >
               <span>{motorLabel(motor)}</span>
-              {(mode === "batch" && index < batchCount) ||
-              verifiedId === motor.id ? (
+              {mode === "batch" && batchResults[index] === "skipped" ? (
+                <strong>Skipped</strong>
+              ) : (mode === "batch" && batchResults[index] === "verified") ||
+                verifiedId === motor.id ? (
                 <strong>Verified</strong>
               ) : null}
             </li>
