@@ -499,3 +499,17 @@ def test_unplugged_calibration_resumes_its_draft_only_on_the_original_board(
     assert session.bus is reconnected_bus
     assert not original_bus.writes
     assert not reconnected_bus.writes
+
+
+def test_motor_order_check_uses_physical_id_and_ignores_tiny_encoder_wrap(tmp_path: Path) -> None:
+    from so101_setup.server import CalibrationApplication
+
+    bus = MemoryServoBus()
+    application = CalibrationApplication(tmp_path, tmp_path / "live")
+    session = session_at(tmp_path, bus)
+    bus.registers["present_position"] = [4095, 2000, 2000, 2000, 2000, 2000]
+    application.check_motor_order(session)
+    bus.registers["present_position"] = [3, 2000, 2000, 2000, 2000, 2070]
+    application.check_motor_order(session)
+    assert application.detected_base_motor == 6
+    assert not bus.writes

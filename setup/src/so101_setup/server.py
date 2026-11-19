@@ -25,15 +25,18 @@ from .calibration import (
     HOME_JOINTS,
     REFERENCE_GRIPPER_RADIANS,
     REFERENCE_JOINTS,
+    RESOLUTION,
     CalibrationSession,
     Failed,
     JointView,
+    Reference,
     Saved,
 )
 from .configuration import ModelVariant, MotorIdOrder
 from .device import RegisterBus, RegisterReadError
 from .discovery import ControllerChoice, discover_controllers
 from .motor_ids import FOLLOWER_MOTORS, program_motor_id, programming_ports
+from .restore import restore_parameters
 from .runtime import asset_directory, setup_directory, setup_lock
 from .storage import NativeSetupStore, SetupStore
 
@@ -54,7 +57,17 @@ class ConnectAction(ActionModel):
 
 
 class SimpleAction(ActionModel):
-    action: Literal["capture_reference", "finish_sweep", "disconnect", "restart", "reopen"]
+    action: Literal[
+        "capture_reference",
+        "finish_sweep",
+        "disconnect",
+        "restart",
+        "reopen",
+        "reset_servos",
+        "skip_servo_reset",
+        "check_motor_order",
+        "apply_detected_motor_order",
+    ]
 
 
 class StartSweepAction(ActionModel):
@@ -108,6 +121,11 @@ class ApplicationView(BaseModel):
     estimated: bool = False
     sweep_only: bool = False
     can_recalibrate_joint: bool = False
+    offer_servo_reset: bool = False
+    motor_id_order: MotorIdOrder = "ascending"
+    checking_motor_order: bool = False
+    detected_base_motor: Literal[1, 6] | None = None
+    servo_reset_incomplete: bool = False
     recalibrating_joint: int | None = None
     gripper_opening: float = 0.5
     home_joints_radians: list[float] = Field(default_factory=lambda: list(HOME_JOINTS))
@@ -135,6 +153,10 @@ class CalibrationApplication:
         self.calibration_root = calibration_root
         self.session: CalibrationSession | None = None
         self.auto_connect = True
+        self.servo_reset_decided = False
+        self.motor_order_sample: list[int] | None = None
+        self.detected_base_motor: Literal[1, 6] | None = None
+        self.incomplete_servo_resets: set[str] = set()
         self.waiting_for_controller = False
         self.calibration_registers: dict[str, list[int]] = {}
         self.lock = threading.RLock()
@@ -195,7 +217,7 @@ class CalibrationApplication:
             for name in ("id", "homing_offset", "min_position_limit", "max_position_limit")
         }
 
-    def connect(self, serial: str) -> None:
+    def connect(self, serial: str, order: MotorIdOrder | None = None) -> None:
         if self.session is not None:
             raise ValueError("Disconnect the current arm before selecting another")
         candidates = [
@@ -206,14 +228,26 @@ class CalibrationApplication:
         controller = candidates[0]
         directory = self.config_directory / "arms" / serial
         setup = self.store.load(directory, serial)
-        if self.motor_id_order_override is not None:
-            _, motor_id_order = self.motor_id_order_override
-            setup = setup.model_copy(update={"motor_id_order": motor_id_order})
+        if order is None and self.motor_id_order_override is not None:
+            _, order = self.motor_id_order_override
+        if order is not None and order != setup.motor_id_order:
+            gains = setup.servos.expected_position_gains_by_motor
+            servos = setup.servos.model_copy(
+                update={
+                    "expected_position_gains_by_motor": {
+                        7 - motor_id: values for motor_id, values in gains.items()
+                    }
+                }
+            )
+            setup = setup.model_copy(update={"motor_id_order": order, "servos": servos})
         bus = RegisterBus(controller.port, setup.motor_ids_in_joint_order())
         try:
             session = CalibrationSession(setup, directory, self.calibration_root, bus, self.store)
             self.calibration_registers = self.read_calibration_registers(bus)
             self.session = session
+            self.servo_reset_decided = False
+            self.motor_order_sample = None
+            self.detected_base_motor = None
         except Exception:
             bus.close()
             raise
@@ -273,6 +307,8 @@ class CalibrationApplication:
                     raise
                 if not self.waiting_for_controller:
                     self.waiting_for_controller = True
+                    self.motor_order_sample = None
+                    self.detected_base_motor = None
                     with contextlib.suppress(OSError, RuntimeError):
                         session.bus.close()
                 return ApplicationView(
@@ -284,6 +320,11 @@ class CalibrationApplication:
                 if not self.waiting_for_controller:
                     raise
                 return ApplicationView(stage="error", serial=session.serial, message=str(error))
+            view.servo_reset_incomplete = session.serial in self.incomplete_servo_resets
+            view.offer_servo_reset = view.stage == "reference" and not self.servo_reset_decided
+            view.motor_id_order = session.setup.motor_id_order
+            view.checking_motor_order = self.motor_order_sample is not None
+            view.detected_base_motor = self.detected_base_motor
             view.model_variant = self.session.setup.model_variant
             if view.model_variant == "stock":
                 view.home_joints_radians = list(REFERENCE_JOINTS)
@@ -291,6 +332,49 @@ class CalibrationApplication:
             if view.stage == "saved" and self.saved_command is not None:
                 view.command = self.saved_command(view.serial)
             return view
+
+    def reset_servos(self, session: CalibrationSession) -> None:
+        serial = session.serial
+        controller = next((item for item in self.controllers() if item.serial == serial), None)
+        if controller is None:
+            raise ValueError("Reconnect this arm before resetting its servos")
+        session.require_torque_off()
+        self.close_session()
+        # Reopen the exact board afterward, even when another controller is present.
+        self.auto_connect = False
+        self.incomplete_servo_resets.add(serial)
+        try:
+            for motor_id in session.setup.motor_ids_in_joint_order():
+                try:
+                    restore_parameters(
+                        controller.port, motor_id, session.directory / "backups" / "servo-restore"
+                    )
+                except Exception as error:
+                    raise RuntimeError(f"Reset stopped on motor {motor_id}: {error}") from error
+        finally:
+            self.connect(serial, session.setup.motor_id_order)
+            if self.session is not None:
+                self.session.restart()
+        self.incomplete_servo_resets.discard(serial)
+        self.servo_reset_decided = True
+
+    def handle_reset_choice(self, session: CalibrationSession, action: Action) -> bool:
+        action_name = action.action
+        choosing_reset = action_name in {"reset_servos", "skip_servo_reset"}
+        awaiting_choice = isinstance(session.state, Reference) and not self.servo_reset_decided
+        if not choosing_reset:
+            if awaiting_choice and action_name in {"start_sweep", "capture_reference"}:
+                raise ValueError("Choose whether to reset servos before the full sweep")
+            return False
+        if not awaiting_choice:
+            raise ValueError("Choose whether to reset servos before the full sweep")
+        if action_name == "reset_servos":
+            self.reset_servos(session)
+        elif session.serial in self.incomplete_servo_resets:
+            raise ValueError("An incomplete reset must be retried before calibration")
+        else:
+            self.servo_reset_decided = True
+        return True
 
     def act(self, action: Action) -> ApplicationView:
         with self.lock:
@@ -304,30 +388,85 @@ class CalibrationApplication:
                     raise ValueError("Connect an arm first")
                 if self.waiting_for_controller:
                     raise ValueError("Wait for the original controller to reconnect")
-                match action:
-                    case SimpleAction(action="reopen"):
-                        if self.session.view().stage != "saved":
-                            raise ValueError("Reopen is available after saving")
-                        serial = self.session.serial
-                        self.session = None
-                        self.connect(serial)
-                    case SimpleAction(action="restart"):
-                        self.session.restart()
-                    case StartSweepAction(joint_index=joint_index):
-                        self.session.start_sweep(joint_index)
-                    case SimpleAction(action="capture_reference"):
-                        self.session.capture_reference()
-                    case SimpleAction(action="finish_sweep"):
-                        self.session.finish_sweep()
-                    case ReverseAction(index=index):
-                        self.session.reverse_joint(index)
-                    case AdjustAction(index=index, delta_radians=delta):
-                        self.session.adjust_joint(index, delta)
-                    case GripperEndpointAction(endpoint=endpoint):
-                        self.session.capture_gripper_endpoint(endpoint)
-                    case SaveAction(model_verified=verified):
-                        self.session.save(model_verified=verified)
+                if self.handle_reset_choice(self.session, action):
+                    return self.view()
+                if isinstance(action, SimpleAction) and action.action == "check_motor_order":
+                    self.check_motor_order(self.session)
+                elif (
+                    isinstance(action, SimpleAction)
+                    and action.action == "apply_detected_motor_order"
+                ):
+                    self.apply_detected_motor_order(self.session)
+                else:
+                    self.apply_session_action(self.session, action)
             return self.view()
+
+    def check_motor_order(self, session: CalibrationSession) -> None:
+        if not isinstance(session.state, Reference):
+            raise ValueError("Check motor order before starting the sweep")
+        positions = session.read_positions()
+        if self.motor_order_sample is None:
+            self.motor_order_sample = positions
+            self.detected_base_motor = None
+            return
+        moved_motors = {
+            motor_id
+            for motor_id, before, after in zip(
+                session.setup.motor_ids_in_joint_order(),
+                self.motor_order_sample,
+                positions,
+                strict=True,
+            )
+            if min(delta := abs(after - before), RESOLUTION - delta) >= 16
+        }
+        self.motor_order_sample = None
+        if moved_motors == {1}:
+            self.detected_base_motor = 1
+        elif moved_motors == {6}:
+            self.detected_base_motor = 6
+        else:
+            raise ValueError("Motor order is unclear. Try again and move only the base joint.")
+
+    def apply_detected_motor_order(self, session: CalibrationSession) -> None:
+        if not isinstance(session.state, Reference) or self.detected_base_motor is None:
+            raise ValueError("Check which motor moves the base first")
+        order: MotorIdOrder = "ascending" if self.detected_base_motor == 1 else "descending"
+        if order == session.setup.motor_id_order:
+            self.detected_base_motor = None
+            return
+        reset_decided = self.servo_reset_decided
+        self.close_session()
+        self.auto_connect = False
+        self.connect(session.serial, order)
+        if self.session is not None:
+            self.session.restart()
+        self.servo_reset_decided = reset_decided
+
+    def apply_session_action(self, session: CalibrationSession, action: Action) -> None:
+        match action:
+            case SimpleAction(action="reopen"):
+                if session.view().stage != "saved":
+                    raise ValueError("Reopen is available after saving")
+                serial = session.serial
+                self.session = None
+                self.connect(serial)
+            case SimpleAction(action="restart"):
+                session.restart()
+                self.servo_reset_decided = False
+            case StartSweepAction(joint_index=joint_index):
+                session.start_sweep(joint_index)
+            case SimpleAction(action="capture_reference"):
+                session.capture_reference()
+            case SimpleAction(action="finish_sweep"):
+                session.finish_sweep()
+            case ReverseAction(index=index):
+                session.reverse_joint(index)
+            case AdjustAction(index=index, delta_radians=delta):
+                session.adjust_joint(index, delta)
+            case GripperEndpointAction(endpoint=endpoint):
+                session.capture_gripper_endpoint(endpoint)
+            case SaveAction(model_verified=verified):
+                session.save(model_verified=verified)
 
     def program_motor(self, action: ProgramMotorAction) -> int:
         with self.lock:

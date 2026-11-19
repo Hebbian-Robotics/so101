@@ -34,6 +34,14 @@ const viewSchema = z.object({
   estimated: z.boolean().default(false),
   sweep_only: z.boolean().default(false),
   can_recalibrate_joint: z.boolean(),
+  offer_servo_reset: z.boolean().default(false),
+  motor_id_order: z.enum(["ascending", "descending"]).default("ascending"),
+  checking_motor_order: z.boolean().default(false),
+  detected_base_motor: z
+    .union([z.literal(1), z.literal(6)])
+    .nullable()
+    .default(null),
+  servo_reset_incomplete: z.boolean().default(false),
   recalibrating_joint: z.number().int().min(0).max(5).nullable(),
   home_joints_radians: z.array(z.number().finite()).length(5),
   home_gripper_radians: z.number().finite(),
@@ -50,6 +58,10 @@ type Action =
         | "disconnect"
         | "capture_reference"
         | "finish_sweep"
+        | "check_motor_order"
+        | "apply_detected_motor_order"
+        | "reset_servos"
+        | "skip_servo_reset"
         | "restart"
         | "reopen";
     }
@@ -371,7 +383,92 @@ function App() {
                     </p>
                   </>
                 ) : null}
+                {stage === "reference" && view ? (
+                  <section aria-labelledby="motor-order-heading">
+                    <h2 id="motor-order-heading">Motor ID order</h2>
+                    <p>
+                      Current order:{" "}
+                      {view.motor_id_order === "ascending" ? "1 → 6" : "6 → 1"}{" "}
+                      from base to gripper.
+                    </p>
+                    {view.checking_motor_order ? (
+                      <p role="status">
+                        With torque off, gently turn only the base, then check
+                        which motor moved.
+                      </p>
+                    ) : null}
+                    {view.detected_base_motor !== null ? (
+                      <>
+                        <p role="status">
+                          Base moved on motor {view.detected_base_motor}.
+                        </p>
+                        <button
+                          type="button"
+                          disabled={disabled}
+                          onClick={() =>
+                            void perform({
+                              action: "apply_detected_motor_order",
+                            })
+                          }
+                        >
+                          Use{" "}
+                          {view.detected_base_motor === 1
+                            ? "ascending"
+                            : "descending"}{" "}
+                          order
+                        </button>
+                      </>
+                    ) : null}
+                    <button
+                      type="button"
+                      disabled={disabled}
+                      onClick={() =>
+                        void perform({ action: "check_motor_order" })
+                      }
+                    >
+                      {view.checking_motor_order
+                        ? "Check which motor moved"
+                        : "Check motor ID order"}
+                    </button>
+                  </section>
+                ) : null}
+                {stage === "reference" && view?.offer_servo_reset ? (
+                  <section aria-labelledby="servo-reset-heading">
+                    <h2 id="servo-reset-heading">
+                      Reset servos before calibration?
+                    </h2>
+                    <p>
+                      Reset backs up and restores factory parameters on all six
+                      servos. Motor IDs stay the same. The full sweep and save
+                      will apply the new calibration and shared servo settings.
+                    </p>
+                    {view.servo_reset_incomplete ? (
+                      <p role="alert">
+                        The previous reset was incomplete. Retry before
+                        calibrating.
+                      </p>
+                    ) : (
+                      <button
+                        type="button"
+                        disabled={disabled}
+                        onClick={() =>
+                          void perform({ action: "skip_servo_reset" })
+                        }
+                      >
+                        Skip reset
+                      </button>
+                    )}
+                    <button
+                      type="button"
+                      disabled={disabled}
+                      onClick={() => void perform({ action: "reset_servos" })}
+                    >
+                      {busy ? "Resetting servos…" : "Reset all six servos"}
+                    </button>
+                  </section>
+                ) : null}
                 {stage === "reference" &&
+                !view?.offer_servo_reset &&
                 view?.model_variant === "soft-gripper-camera" ? (
                   <>
                     <h2>Start calibration</h2>
@@ -392,6 +489,7 @@ function App() {
                   </>
                 ) : null}
                 {stage === "reference" &&
+                !view?.offer_servo_reset &&
                 view?.model_variant !== "soft-gripper-camera" ? (
                   <>
                     <h2>Match the reference pose</h2>
