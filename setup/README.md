@@ -58,7 +58,7 @@ The default store is `$SO101_SETUP_DIRECTORY`, otherwise
 `$XDG_CONFIG_HOME/so101-setup` (defaulting to `~/.config/so101-setup`).
 
 Motor IDs may run from `1` to `6` or from `6` to `1` from the base to the
-gripper. The default is ascending. For a different order, open **Edit motor mapping** before the sweep. Choose
+gripper. The default is ascending. For a different order, open **Edit motor mapping** during the full sweep. Choose
 an ascending or descending shortcut, or assign each motor ID to a joint. IDs
 1 through 6 must each appear once. Move the joints by hand with torque off to
 verify the correspondence. Save records the mapping in the `[motor_ids]`

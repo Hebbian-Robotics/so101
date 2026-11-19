@@ -402,8 +402,7 @@ class CalibrationApplication:
             return self.view()
 
     def check_motor_order(self, session: CalibrationSession) -> None:
-        if not isinstance(session.state, Reference):
-            raise ValueError("Check motor order before starting the sweep")
+        self.require_full_sweep(session)
         positions = session.read_positions()
         if self.motor_order_sample is None:
             self.motor_order_sample = positions
@@ -428,16 +427,20 @@ class CalibrationApplication:
             raise ValueError("Motor order is unclear. Try again and move only the base joint.")
 
     def apply_detected_motor_order(self, session: CalibrationSession) -> None:
-        if not isinstance(session.state, Reference) or self.detected_base_motor is None:
+        if self.detected_base_motor is None:
             raise ValueError("Check which motor moves the base first")
         ids = MOTOR_IDS if self.detected_base_motor == 1 else MOTOR_IDS[::-1]
         self.apply_motor_mapping(session, motor_id_mapping(ids))
 
-    def apply_motor_mapping(self, session: CalibrationSession, motor_ids: dict[str, int]) -> None:
+    @staticmethod
+    def require_full_sweep(session: CalibrationSession) -> SweepRecording:
         state = session.state
-        full_sweep = isinstance(state, SweepRecording) and state.recalibration is None
-        if not isinstance(state, Reference) and not full_sweep:
-            raise ValueError("Motor mapping can only change before or during a full sweep")
+        if not isinstance(state, SweepRecording) or state.recalibration is not None:
+            raise ValueError("Motor mapping is available during a full sweep")
+        return state
+
+    def apply_motor_mapping(self, session: CalibrationSession, motor_ids: dict[str, int]) -> None:
+        state = self.require_full_sweep(session)
         self.with_motor_ids(session.setup, motor_ids)
         session.require_torque_off()
         if motor_ids == session.setup.motor_ids:
@@ -451,15 +454,14 @@ class CalibrationApplication:
         self.connect(session.serial, motor_ids)
         assert self.session is not None
         self.session.restart()
-        if isinstance(state, SweepRecording):
-            new_ids = self.session.setup.motor_ids_in_joint_order()
-            if any(
-                dict(zip(old_ids, values, strict=True))
-                != dict(zip(new_ids, self.calibration_registers[name], strict=True))
-                for name, values in old_registers.items()
-            ):
-                raise ValueError("Motor registers changed. Start a fresh sweep before saving.")
-            self.session.state = remap_full_sweep(state, old_ids, self.session.setup)
+        new_ids = self.session.setup.motor_ids_in_joint_order()
+        if any(
+            dict(zip(old_ids, values, strict=True))
+            != dict(zip(new_ids, self.calibration_registers[name], strict=True))
+            for name, values in old_registers.items()
+        ):
+            raise ValueError("Motor registers changed. Start a fresh sweep before saving.")
+        self.session.state = remap_full_sweep(state, old_ids, self.session.setup)
         self.servo_reset_decided = reset_decided
 
     def apply_session_action(self, session: CalibrationSession, action: Action) -> None:

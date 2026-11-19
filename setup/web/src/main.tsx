@@ -380,9 +380,7 @@ function App() {
                     </p>
                   </>
                 ) : null}
-                {view &&
-                (stage === "reference" ||
-                  (stage === "sweep" && recalibratingJoint === null)) ? (
+                {view && stage === "sweep" && recalibratingJoint === null ? (
                   <section aria-labelledby="motor-order-heading">
                     <h2 id="motor-order-heading">Motor ID order</h2>
                     <p>
@@ -396,13 +394,10 @@ function App() {
                     </p>
                     <details>
                       <summary>Edit motor mapping</summary>
-                      {stage === "sweep" ? (
-                        <p>
-                          Recorded travel follows the motor ID when you change
-                          the mapping. Check the updated joint rows after
-                          applying it.
-                        </p>
-                      ) : null}
+                      <p>
+                        Recorded travel follows the motor ID when you change the
+                        mapping. Check the updated joint rows after applying it.
+                      </p>
                       <form
                         key={JSON.stringify(view.motor_ids)}
                         method="post"
@@ -473,49 +468,45 @@ function App() {
                         </fieldset>
                       </form>
                     </details>
-                    {stage === "reference" ? (
+                    {view.checking_motor_order ? (
+                      <p role="status">
+                        With torque off, gently turn only the base, then check
+                        which motor moved.
+                      </p>
+                    ) : null}
+                    {view.detected_base_motor !== null ? (
                       <>
-                        {view.checking_motor_order ? (
-                          <p role="status">
-                            With torque off, gently turn only the base, then
-                            check which motor moved.
-                          </p>
-                        ) : null}
-                        {view.detected_base_motor !== null ? (
-                          <>
-                            <p role="status">
-                              Base moved on motor {view.detected_base_motor}.
-                            </p>
-                            <button
-                              type="button"
-                              disabled={disabled}
-                              onClick={() =>
-                                void perform({
-                                  action: "apply_detected_motor_order",
-                                })
-                              }
-                            >
-                              Use{" "}
-                              {view.detected_base_motor === 1
-                                ? "ascending"
-                                : "descending"}{" "}
-                              order
-                            </button>
-                          </>
-                        ) : null}
+                        <p role="status">
+                          Base moved on motor {view.detected_base_motor}.
+                        </p>
                         <button
                           type="button"
                           disabled={disabled}
                           onClick={() =>
-                            void perform({ action: "check_motor_order" })
+                            void perform({
+                              action: "apply_detected_motor_order",
+                            })
                           }
                         >
-                          {view.checking_motor_order
-                            ? "Check which motor moved"
-                            : "Check motor ID order"}
+                          Use{" "}
+                          {view.detected_base_motor === 1
+                            ? "ascending"
+                            : "descending"}{" "}
+                          order
                         </button>
                       </>
                     ) : null}
+                    <button
+                      type="button"
+                      disabled={disabled}
+                      onClick={() =>
+                        void perform({ action: "check_motor_order" })
+                      }
+                    >
+                      {view.checking_motor_order
+                        ? "Check which motor moved"
+                        : "Check motor ID order"}
+                    </button>
                   </section>
                 ) : null}
                 {stage === "reference" && view?.offer_servo_reset ? (
@@ -811,15 +802,14 @@ function App() {
                       </thead>
                       <tbody>
                         {view.joints.map((joint, index) => (
-                          <tr key={joint.name}>
+                          <tr
+                            key={joint.name}
+                            className={
+                              joint.moving ? "joint-active" : undefined
+                            }
+                          >
                             <th scope="row">
-                              {joint.moving ? (
-                                <mark>
-                                  {labels[joint.name] ?? joint.name} · Moving
-                                </mark>
-                              ) : (
-                                (labels[joint.name] ?? joint.name)
-                              )}
+                              {labels[joint.name] ?? joint.name}
                               {stage === "sweep" &&
                               view.motor_ids?.[joint.name] !== undefined
                                 ? ` · ID ${view.motor_ids[joint.name]}`
