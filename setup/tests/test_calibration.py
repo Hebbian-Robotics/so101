@@ -209,7 +209,8 @@ def test_matching_saved_calibration_skips_manual_steps_and_preserves_tuned_endpo
     document = tomllib.loads((session.directory / "setup.toml").read_text())
     document["gripper"]["closed_position_radians"] = 0.5
     document["gripper"]["open_position_radians"] = 1.0
-    document["servos"]["expected_position_gains_by_motor"]["2"] = [24, 0, 32]
+    assert "servos" not in document
+    document["servos"] = {"expected_position_gains_by_motor": {"2": [24, 0, 32]}}
     (session.directory / "setup.toml").write_text(tomli_w.dumps(document))
     setup = NativeSetupStore().load(session.directory, "ARM_A")
     writes_before_reconnect = list(bus.writes)
@@ -220,8 +221,9 @@ def test_matching_saved_calibration_skips_manual_steps_and_preserves_tuned_endpo
     saved_setup = NativeSetupStore().load(session.directory, "ARM_A")
     assert saved_setup.gripper.closed_position_radians == 0.5
     assert saved_setup.gripper.open_position_radians == 1.0
-    assert saved_setup.servos.expected_position_gains_by_motor[2] == [24, 0, 32]
-    assert bus.registers["p_coefficient"][1] == 24
+    assert saved_setup.servos.expected_position_gains_by_motor[2] == [32, 0, 32]
+    assert bus.registers["p_coefficient"][1] == 32
+    assert "servos" not in tomllib.loads((session.directory / "setup.toml").read_text())
 
 
 def test_explicit_gripper_endpoints_can_be_inside_travel_and_in_reverse_encoder_order(
