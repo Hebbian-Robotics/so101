@@ -17,6 +17,7 @@ dependencies = [
 
 [project.scripts]
 so101-calibrate = "so101_setup.server:command_line"
+so101-restore-servo = "so101_setup.restore:command_line"
 
 [build-system]
 requires = ["uv_build>=0.13.6,<0.14"]

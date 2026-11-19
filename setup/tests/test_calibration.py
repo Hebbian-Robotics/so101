@@ -451,3 +451,51 @@ def test_reverse_calibration_writes_physical_joint_ranges_and_reopens(tmp_path: 
     bus.driven_motor_ids = bus.all_motor_ids = [1, 2, 3, 4, 5, 6]
     changed_order = CalibrationSession(ArmSetup(serial="ARM_A"), directory, tmp_path / "live", bus)
     assert isinstance(changed_order.state, Reference)
+
+
+def test_unplugged_calibration_resumes_its_draft_only_on_the_original_board(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from so101_setup import server
+    from so101_setup.device import RegisterReadError
+    from so101_setup.discovery import ControllerChoice
+
+    class DisconnectableBus(MemoryServoBus):
+        unplugged = False
+
+        def read_registers(self, name: str, motor_ids: list[int] | None = None) -> list[int]:
+            if self.unplugged:
+                raise RegisterReadError("No such device or address")
+            if name == "id":
+                return self.driven_motor_ids
+            return super().read_registers(name, motor_ids)
+
+    original_bus = DisconnectableBus()
+    reconnected_bus = DisconnectableBus()
+    available = [ControllerChoice(serial="ARM_A", port="original", registered=False)]
+    buses = {"original": original_bus, "new-port": reconnected_bus}
+    monkeypatch.setattr(server, "discover_controllers", lambda *_: available)
+    monkeypatch.setattr(server, "RegisterBus", lambda port, _motor_ids: buses[port])
+    application = server.CalibrationApplication(tmp_path, tmp_path / "live")
+    assert application.view().stage == "reference"
+    session = application.session
+    assert session is not None
+    session.capture_reference()
+    original_bus.registers["present_position"] = [1800] * 6
+    assert application.view().stage == "sweep"
+    draft = session.state
+
+    original_bus.unplugged = True
+    assert application.view().stage == "error"
+    assert original_bus.closed
+    available[:] = [ControllerChoice(serial="ARM_B", port="other", registered=False)]
+    assert "ARM_A" in application.view().message
+
+    available[:] = [ControllerChoice(serial="ARM_A", port="new-port", registered=False)]
+    reconnected_bus.registers["present_position"] = [2300] * 6
+    assert application.view().stage == "sweep"
+    assert application.session is session
+    assert session.state is draft
+    assert session.bus is reconnected_bus
+    assert not original_bus.writes
+    assert not reconnected_bus.writes

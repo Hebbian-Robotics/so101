@@ -95,3 +95,20 @@ beside its `setup.toml`. Set only the keys it needs:
 `maximum_acceleration`, `gripper_max_torque_limit`, or
 `gripper_protection_current`. The tool applies them on the next full save.
 New arm setups do not create this file.
+
+### Restore one servo's parameters
+
+Stop the motion station and close the calibration tool. With the arm supported,
+all six servos powered and torque off, run:
+
+```sh
+uv run --project setup so101-restore-servo --serial BOARD_SERIAL --motor-id 4 --confirm-restore
+```
+
+This sends a parameter restore to the specified ID on the daisy chain. It
+requires six responding servos and a target STS3215 reporting model 777 and
+firmware 3.10. Connect only one arm to the chosen board and make sure its motor
+IDs are unique. Before and after snapshots go under the arm's `backups/`
+directory. The restore changes the target servo's stored parameters, including
+calibration. Restore its calibration and verify it with torque off before
+enabling the arm.

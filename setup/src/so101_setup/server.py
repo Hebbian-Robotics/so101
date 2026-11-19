@@ -26,10 +26,12 @@ from .calibration import (
     REFERENCE_GRIPPER_RADIANS,
     REFERENCE_JOINTS,
     CalibrationSession,
+    Failed,
     JointView,
+    Saved,
 )
 from .configuration import ModelVariant, MotorIdOrder
-from .device import RegisterBus
+from .device import RegisterBus, RegisterReadError
 from .discovery import ControllerChoice, discover_controllers
 from .motor_ids import FOLLOWER_MOTORS, program_motor_id, programming_ports
 from .runtime import asset_directory, setup_directory, setup_lock
@@ -133,6 +135,8 @@ class CalibrationApplication:
         self.calibration_root = calibration_root
         self.session: CalibrationSession | None = None
         self.auto_connect = True
+        self.waiting_for_controller = False
+        self.calibration_registers: dict[str, list[int]] = {}
         self.lock = threading.RLock()
         self.stream_condition = threading.Condition()
         self.stream_subscribers = 0
@@ -184,6 +188,13 @@ class CalibrationApplication:
         override_serial, _ = self.motor_id_order_override
         return [controller for controller in controllers if controller.serial == override_serial]
 
+    @staticmethod
+    def read_calibration_registers(bus: RegisterBus) -> dict[str, list[int]]:
+        return {
+            name: bus.read_registers(name)
+            for name in ("id", "homing_offset", "min_position_limit", "max_position_limit")
+        }
+
     def connect(self, serial: str) -> None:
         if self.session is not None:
             raise ValueError("Disconnect the current arm before selecting another")
@@ -200,19 +211,51 @@ class CalibrationApplication:
             setup = setup.model_copy(update={"motor_id_order": motor_id_order})
         bus = RegisterBus(controller.port, setup.motor_ids_in_joint_order())
         try:
-            self.session = CalibrationSession(
-                setup, directory, self.calibration_root, bus, self.store
-            )
+            session = CalibrationSession(setup, directory, self.calibration_root, bus, self.store)
+            self.calibration_registers = self.read_calibration_registers(bus)
+            self.session = session
         except Exception:
             bus.close()
             raise
+
+    def reconnect(self, session: CalibrationSession) -> None:
+        controller = next(
+            (
+                controller
+                for controller in self.controllers()
+                if controller.serial == session.serial
+            ),
+            None,
+        )
+        if controller is None:
+            raise RegisterReadError(f"Waiting for USB controller {session.serial}")
+        bus = RegisterBus(controller.port, session.setup.motor_ids_in_joint_order())
+        try:
+            if any(bus.read_registers("torque_enable")):
+                raise RuntimeError("Disable torque on all motors before reconnecting")
+            if self.read_calibration_registers(bus) != self.calibration_registers:
+                raise RuntimeError(
+                    "Motor calibration changed; discard this draft before continuing"
+                )
+        except Exception:
+            bus.close()
+            raise
+        session.bus = bus
+        self.waiting_for_controller = False
 
     def view(self) -> ApplicationView:
         with self.lock:
             if self.session is None:
                 controllers = self.controllers()
                 if self.auto_connect and len(controllers) == 1:
-                    self.connect(controllers[0].serial)
+                    try:
+                        self.connect(controllers[0].serial)
+                    except (OSError, RuntimeError, ValueError) as error:
+                        return ApplicationView(
+                            stage="disconnected",
+                            controllers=controllers,
+                            message=f"Could not connect to {controllers[0].serial}: {error}",
+                        )
                 else:
                     return ApplicationView(
                         stage="disconnected",
@@ -220,7 +263,27 @@ class CalibrationApplication:
                         message="Plug in an arm, or select its USB controller below.",
                     )
             assert self.session is not None
-            view = ApplicationView.model_validate(self.session.view().model_dump())
+            session = self.session
+            try:
+                if self.waiting_for_controller:
+                    self.reconnect(session)
+                view = ApplicationView.model_validate(session.view().model_dump())
+            except RegisterReadError as error:
+                if isinstance(session.state, (Saved, Failed)):
+                    raise
+                if not self.waiting_for_controller:
+                    self.waiting_for_controller = True
+                    with contextlib.suppress(OSError, RuntimeError):
+                        session.bus.close()
+                return ApplicationView(
+                    stage="error",
+                    serial=session.serial,
+                    message=f"Calibration paused. Reconnecting to the same board: {error}",
+                )
+            except (OSError, RuntimeError) as error:
+                if not self.waiting_for_controller:
+                    raise
+                return ApplicationView(stage="error", serial=session.serial, message=str(error))
             view.model_variant = self.session.setup.model_variant
             if view.model_variant == "stock":
                 view.home_joints_radians = list(REFERENCE_JOINTS)
@@ -239,6 +302,8 @@ class CalibrationApplication:
             else:
                 if self.session is None:
                     raise ValueError("Connect an arm first")
+                if self.waiting_for_controller:
+                    raise ValueError("Wait for the original controller to reconnect")
                 match action:
                     case SimpleAction(action="reopen"):
                         if self.session.view().stage != "saved":
@@ -286,8 +351,10 @@ class CalibrationApplication:
 
     def close_session(self) -> None:
         if self.session is not None:
-            self.session.bus.close()
+            if not self.waiting_for_controller:
+                self.session.bus.close()
             self.session = None
+            self.waiting_for_controller = False
 
 
 def calibration_root() -> Path:

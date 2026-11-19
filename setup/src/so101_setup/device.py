@@ -10,6 +10,10 @@ TIMEOUT_SECONDS = 0.05
 READ_RETRIES = 2
 
 
+class RegisterReadError(RuntimeError):
+    """The bus could not return the requested readings."""
+
+
 class RegisterBus:
     """Acknowledged register reads and writes on one arm's Feetech bus."""
 
@@ -35,7 +39,10 @@ class RegisterBus:
 
     def read_registers(self, name: str, motor_ids: list[int] | None = None) -> list[int]:
         ids = self.driven_motor_ids if motor_ids is None else motor_ids
-        answers = self.bus.sync_read_register_with_error(ids, name, retries=READ_RETRIES)
+        try:
+            answers = self.bus.sync_read_register_with_error(ids, name, retries=READ_RETRIES)
+        except (OSError, RuntimeError) as error:
+            raise RegisterReadError(f"Could not read {name}: {error}") from error
         refused = [
             motor_id
             for motor_id, (_, status) in zip(ids, answers, strict=True)
