@@ -59,6 +59,18 @@ fn confirmed_excursion(counter: &mut u8, outside: bool, severe: bool) -> bool {
     severe || *counter >= ENVIRONMENT_CONFIRMATION_SAMPLES
 }
 
+/// Flags an overheat confirmed only by one immediate re-read after a normal cycle.
+fn sudden_overheat_note(sudden: bool, initial_temperature: f64) -> String {
+    if !sudden {
+        return String::new();
+    }
+    format!(
+        " (jumped from within limits to {initial_temperature:.0}C in one cycle and a single \
+         immediate re-read confirmed it; this can be two corrupted bus reads, so check the next \
+         cycles' temperature in the trace)"
+    )
+}
+
 pub struct Servos<B: ServoBus> {
     pub(super) bus: B,
     config: ValidatedFeetechConfig,
@@ -330,6 +342,8 @@ impl<B: ServoBus> Servos<B> {
                 temperature > self.config.max_temperature_celsius,
                 severe_temperature && temperature > self.config.max_temperature_celsius,
             );
+            // Only the severe reading and one re-read agreed; two corrupted reads look the same.
+            let sudden_overheat = overheated && readings.high_temperature == 1;
             let low_voltage = confirmed_excursion(
                 &mut readings.low_voltage,
                 voltage < self.config.min_voltage_volts,
@@ -348,7 +362,7 @@ impl<B: ServoBus> Servos<B> {
             let lost_torque = torque.is_some_and(|torque| torque[index] == 0);
             if alarm != 0 || overheated || lost_torque {
                 faults.push(format!(
-                    "{}: {}{}{} {temperature:.0}C",
+                    "{}: {}{}{} {temperature:.0}C{}",
                     motor_id,
                     if alarm == 0 && overheated {
                         "over temperature".to_owned()
@@ -361,6 +375,7 @@ impl<B: ServoBus> Servos<B> {
                     } else {
                         ""
                     },
+                    sudden_overheat_note(sudden_overheat, initial_temperature),
                 ));
             }
         }

@@ -613,6 +613,28 @@ fn severe_confirmed_reading_or_failed_confirmation_does_not_clear_a_fault() {
 }
 
 #[test]
+fn severe_overheat_from_within_limits_flags_a_possible_corrupted_read() {
+    let mut bus = FakeBus::healthy();
+    bus.set(2, "present_temperature", 128);
+    bus.confirmation_override = Some((2, 97, 118));
+    let fault = servos(bus).read_feedback().unwrap().fault.unwrap();
+    assert!(
+        fault.contains("2: over temperature 97C (jumped from within limits to 128C"),
+        "{fault}"
+    );
+
+    let mut arm = servos(FakeBus::healthy());
+    arm.bus.set(1, "present_temperature", 66);
+    arm.read_feedback().unwrap();
+    arm.read_feedback().unwrap();
+    let fault = arm.read_feedback().unwrap().fault.unwrap();
+    assert!(
+        fault.contains("1: over temperature") && !fault.contains("jumped"),
+        "{fault}"
+    );
+}
+
+#[test]
 fn losing_torque_after_enabling_is_a_fault() {
     let mut arm = servos(FakeBus::healthy());
     arm.enable().unwrap();
