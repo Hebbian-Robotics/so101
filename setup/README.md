@@ -24,14 +24,13 @@ then install and daisy chain the motors during assembly.
 
 Open **Calibrate arm** after assembly and select its USB controller. On a fresh
 launch, the calibration page selects a single connected controller automatically.
-For the soft-gripper-and-camera assembly, support the disabled arm in the shown
+Support the disabled arm in the shown
 resting pose with the gripper closed, then start recording and gently sweep
 each joint through its safe travel, including wrist roll and gripper opening.
 The tool flags unusually short sweeps so you can continue recording any missed
 joint. Never force a joint to satisfy the check. Review and adjust the live
 model before saving. The home pose is an estimate,
-so compare multiple positions. The stock-gripper variant uses its reference
-pose and explicit gripper endpoints.
+so compare multiple positions.
 
 If one joint needs a fresh calibration, open the arm’s saved setup and choose
 **Recalibrate one joint** on the review screen. This option is available when
@@ -66,7 +65,7 @@ verify the correspondence. Save records the mapping in the `[motor_ids]`
 table and leaves the programmed servo IDs intact.
 
 New arms default to the soft gripper with wrist camera and start calibration in
-the resting pose. For a stock gripper and midpoint reference pose, start with
+the resting pose. For stock gripper geometry, start with
 `so101-calibrate --model-variant stock`.
 Existing arms keep the `model_variant` in their `setup.toml`; to change an
 existing arm's model, edit that field before starting the tool. The viewer selects the corresponding model and saving calibration

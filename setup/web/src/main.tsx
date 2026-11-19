@@ -11,6 +11,7 @@ const jointSchema = z.object({
   position_radians: z.number().finite(),
   range_min: z.number().int(),
   range_max: z.number().int(),
+  moving: z.boolean().default(false),
   sign: z.union([z.literal(-1), z.literal(1)]),
 });
 const viewSchema = z.object({
@@ -28,11 +29,8 @@ const viewSchema = z.object({
   ),
   serial: z.string(),
   joints: z.array(jointSchema),
-  gripper_closed_recorded: z.boolean(),
-  gripper_open_recorded: z.boolean(),
   gripper_opening: z.number().finite(),
   estimated: z.boolean().default(false),
-  sweep_only: z.boolean().default(false),
   can_recalibrate_joint: z.boolean(),
   offer_servo_reset: z.boolean().default(false),
   motor_ids: z.record(z.string(), z.number().int().min(1).max(6)).optional(),
@@ -57,7 +55,6 @@ type Action =
   | {
       action:
         | "disconnect"
-        | "capture_reference"
         | "finish_sweep"
         | "check_motor_order"
         | "apply_detected_motor_order"
@@ -68,7 +65,6 @@ type Action =
     }
   | { action: "reverse_joint"; index: number }
   | { action: "adjust_joint"; index: number; delta_radians: number }
-  | { action: "capture_gripper_endpoint"; endpoint: "closed" | "open" }
   | { action: "save"; model_verified: true };
 const jointNames = [
   "shoulder_pan",
@@ -384,7 +380,9 @@ function App() {
                     </p>
                   </>
                 ) : null}
-                {stage === "reference" && view ? (
+                {view &&
+                (stage === "reference" ||
+                  (stage === "sweep" && recalibratingJoint === null)) ? (
                   <section aria-labelledby="motor-order-heading">
                     <h2 id="motor-order-heading">Motor ID order</h2>
                     <p>
@@ -398,6 +396,13 @@ function App() {
                     </p>
                     <details>
                       <summary>Edit motor mapping</summary>
+                      {stage === "sweep" ? (
+                        <p>
+                          Recorded travel follows the motor ID when you change
+                          the mapping. Check the updated joint rows after
+                          applying it.
+                        </p>
+                      ) : null}
                       <form
                         key={JSON.stringify(view.motor_ids)}
                         method="post"
@@ -468,45 +473,49 @@ function App() {
                         </fieldset>
                       </form>
                     </details>
-                    {view.checking_motor_order ? (
-                      <p role="status">
-                        With torque off, gently turn only the base, then check
-                        which motor moved.
-                      </p>
-                    ) : null}
-                    {view.detected_base_motor !== null ? (
+                    {stage === "reference" ? (
                       <>
-                        <p role="status">
-                          Base moved on motor {view.detected_base_motor}.
-                        </p>
+                        {view.checking_motor_order ? (
+                          <p role="status">
+                            With torque off, gently turn only the base, then
+                            check which motor moved.
+                          </p>
+                        ) : null}
+                        {view.detected_base_motor !== null ? (
+                          <>
+                            <p role="status">
+                              Base moved on motor {view.detected_base_motor}.
+                            </p>
+                            <button
+                              type="button"
+                              disabled={disabled}
+                              onClick={() =>
+                                void perform({
+                                  action: "apply_detected_motor_order",
+                                })
+                              }
+                            >
+                              Use{" "}
+                              {view.detected_base_motor === 1
+                                ? "ascending"
+                                : "descending"}{" "}
+                              order
+                            </button>
+                          </>
+                        ) : null}
                         <button
                           type="button"
                           disabled={disabled}
                           onClick={() =>
-                            void perform({
-                              action: "apply_detected_motor_order",
-                            })
+                            void perform({ action: "check_motor_order" })
                           }
                         >
-                          Use{" "}
-                          {view.detected_base_motor === 1
-                            ? "ascending"
-                            : "descending"}{" "}
-                          order
+                          {view.checking_motor_order
+                            ? "Check which motor moved"
+                            : "Check motor ID order"}
                         </button>
                       </>
                     ) : null}
-                    <button
-                      type="button"
-                      disabled={disabled}
-                      onClick={() =>
-                        void perform({ action: "check_motor_order" })
-                      }
-                    >
-                      {view.checking_motor_order
-                        ? "Check which motor moved"
-                        : "Check motor ID order"}
-                    </button>
                   </section>
                 ) : null}
                 {stage === "reference" && view?.offer_servo_reset ? (
@@ -544,11 +553,10 @@ function App() {
                     </button>
                   </section>
                 ) : null}
-                {stage === "reference" &&
-                !view?.offer_servo_reset &&
-                view?.model_variant === "soft-gripper-camera" ? (
+                {stage === "reference" && !view?.offer_servo_reset ? (
                   <>
                     <h2>Start calibration</h2>
+                    {view?.message ? <p role="status">{view.message}</p> : null}
                     <p>
                       Support and disable the arm. Place it in the resting pose
                       shown, with the gripper fully closed. Start the sweep to
@@ -565,37 +573,7 @@ function App() {
                     </button>
                   </>
                 ) : null}
-                {stage === "reference" &&
-                !view?.offer_servo_reset &&
-                view?.model_variant !== "soft-gripper-camera" ? (
-                  <>
-                    <h2>Match the reference pose</h2>
-                    {view?.message ? (
-                      <p className="detail" role="status">
-                        {view.message}
-                      </p>
-                    ) : null}
-                    <p>
-                      Support the arm. Set each of the five joints to its model
-                      zero and the gripper to approximately 43° open.
-                    </p>
-                    <p>
-                      When the physical arm is positioned, capture it. The live
-                      model and joint readings appear after this step.
-                    </p>
-                    <button
-                      className="primary"
-                      type="button"
-                      disabled={disabled}
-                      onClick={() =>
-                        void perform({ action: "capture_reference" })
-                      }
-                    >
-                      Use this position
-                    </button>
-                  </>
-                ) : null}
-                {stage === "sweep" && view?.sweep_only ? (
+                {stage === "sweep" ? (
                   <>
                     <h2>
                       {recalibratingName
@@ -618,60 +596,6 @@ function App() {
                       Move slowly enough for the readings to follow. The model
                       appears after you finish the sweep.
                     </p>
-                    <button
-                      className="primary"
-                      type="button"
-                      disabled={disabled}
-                      onClick={() => void perform({ action: "finish_sweep" })}
-                    >
-                      Finish recording
-                    </button>
-                  </>
-                ) : null}
-                {stage === "sweep" && !view?.sweep_only ? (
-                  <>
-                    <h2>Record safe travel</h2>
-                    <p>
-                      Gently move each joint through its safe travel, one at a
-                      time. Close the gripper and record its closed position,
-                      then open it to the safe endpoint and record open. Keep
-                      supporting the arm.
-                    </p>
-                    <p>
-                      Check that the gray model follows the physical arm. If one
-                      joint moves in the wrong direction, reverse it in the
-                      table.
-                    </p>
-                    <div className="secondary-actions">
-                      <button
-                        type="button"
-                        disabled={disabled}
-                        onClick={() =>
-                          void perform({
-                            action: "capture_gripper_endpoint",
-                            endpoint: "closed",
-                          })
-                        }
-                      >
-                        {view?.gripper_closed_recorded
-                          ? "Closed position recorded"
-                          : "Record closed gripper"}
-                      </button>
-                      <button
-                        type="button"
-                        disabled={disabled}
-                        onClick={() =>
-                          void perform({
-                            action: "capture_gripper_endpoint",
-                            endpoint: "open",
-                          })
-                        }
-                      >
-                        {view?.gripper_open_recorded
-                          ? "Open position recorded"
-                          : "Record open gripper"}
-                      </button>
-                    </div>
                     <button
                       className="primary"
                       type="button"
@@ -761,10 +685,8 @@ function App() {
                         </label>
                         <p className="detail" id="joint-reference-instructions">
                           Support and disable the arm. Match the selected joint
-                          to the reference pose before starting the sweep.
-                          {softGripper
-                            ? " For the gripper, start fully closed."
-                            : " For the gripper, start about 43° open."}
+                          to the reference pose before starting the sweep. For
+                          the gripper, start fully closed.
                         </p>
                         <button
                           type="submit"
@@ -845,7 +767,7 @@ function App() {
                 className="visual-feedback"
                 aria-label="Calibration feedback"
               >
-                {view?.sweep_only ? (
+                {stage === "sweep" ? (
                   <p role="status">The model appears after the sweep.</p>
                 ) : (
                   <RobotScene
@@ -870,13 +792,7 @@ function App() {
                     }
                   />
                 )}
-                {showReference ? (
-                  <p>
-                    {softGripper
-                      ? "Resting pose reference"
-                      : "Model zero reference"}
-                  </p>
-                ) : null}
+                {showReference ? <p>Resting pose reference</p> : null}
                 {stage !== "reference" && view?.joints.length ? (
                   <div className="joint-readings">
                     <table>
@@ -888,21 +804,28 @@ function App() {
                       <thead>
                         <tr>
                           <th>Joint</th>
-                          {!view?.sweep_only && <th>Angle</th>}
+                          {stage !== "sweep" && <th>Angle</th>}
                           <th>Travel recorded</th>
-                          {(stage === "sweep" && !view?.sweep_only) ||
-                          stage === "review" ? (
-                            <th>Adjust model</th>
-                          ) : null}
+                          {stage === "review" ? <th>Adjust model</th> : null}
                         </tr>
                       </thead>
                       <tbody>
                         {view.joints.map((joint, index) => (
                           <tr key={joint.name}>
                             <th scope="row">
-                              {labels[joint.name] ?? joint.name}
+                              {joint.moving ? (
+                                <mark>
+                                  {labels[joint.name] ?? joint.name} · Moving
+                                </mark>
+                              ) : (
+                                (labels[joint.name] ?? joint.name)
+                              )}
+                              {stage === "sweep" &&
+                              view.motor_ids?.[joint.name] !== undefined
+                                ? ` · ID ${view.motor_ids[joint.name]}`
+                                : null}
                             </th>
-                            {!view?.sweep_only && (
+                            {stage !== "sweep" && (
                               <td>
                                 {(
                                   (joint.position_radians * 180) /
@@ -916,10 +839,9 @@ function App() {
                                 ? `${(((joint.range_max - joint.range_min) * 360) / 4096).toFixed(0)}°`
                                 : "Move this joint"}
                             </td>
-                            {(stage === "sweep" && !view?.sweep_only) ||
-                            (stage === "review" &&
-                              (recalibratingJoint === null ||
-                                recalibratingJoint === index)) ? (
+                            {stage === "review" &&
+                            (recalibratingJoint === null ||
+                              recalibratingJoint === index) ? (
                               <td>
                                 <button
                                   type="button"

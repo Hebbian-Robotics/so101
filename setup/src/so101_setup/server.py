@@ -23,14 +23,14 @@ from pydantic import BaseModel, ConfigDict, Field, TypeAdapter
 from .calibration import (
     HOME_GRIPPER_RADIANS,
     HOME_JOINTS,
-    REFERENCE_GRIPPER_RADIANS,
-    REFERENCE_JOINTS,
     RESOLUTION,
     CalibrationSession,
     Failed,
     JointView,
     Reference,
     Saved,
+    SweepRecording,
+    remap_full_sweep,
 )
 from .configuration import (
     DEFAULT_NEW_ARM_MODEL,
@@ -65,7 +65,6 @@ class ConnectAction(ActionModel):
 
 class SimpleAction(ActionModel):
     action: Literal[
-        "capture_reference",
         "finish_sweep",
         "disconnect",
         "restart",
@@ -98,11 +97,6 @@ class AdjustAction(ActionModel):
     delta_radians: float = Field(ge=-0.1, le=0.1, allow_inf_nan=False)
 
 
-class GripperEndpointAction(ActionModel):
-    action: Literal["capture_gripper_endpoint"]
-    endpoint: Literal["closed", "open"]
-
-
 class SaveAction(ActionModel):
     action: Literal["save"]
     model_verified: Literal[True]
@@ -115,7 +109,6 @@ Action = Annotated[
     | StartSweepAction
     | ReverseAction
     | AdjustAction
-    | GripperEndpointAction
     | SaveAction,
     Field(discriminator="action"),
 ]
@@ -129,10 +122,7 @@ class ApplicationView(BaseModel):
     serial: str = ""
     model_variant: ModelVariant = DEFAULT_NEW_ARM_MODEL
     joints: list[JointView] = Field(default_factory=list)
-    gripper_closed_recorded: bool = False
-    gripper_open_recorded: bool = False
     estimated: bool = False
-    sweep_only: bool = False
     can_recalibrate_joint: bool = False
     offer_servo_reset: bool = False
     motor_ids: dict[str, int] = Field(default_factory=lambda: motor_id_mapping(MOTOR_IDS))
@@ -339,9 +329,6 @@ class CalibrationApplication:
             view.checking_motor_order = self.motor_order_sample is not None
             view.detected_base_motor = self.detected_base_motor
             view.model_variant = self.session.setup.model_variant
-            if view.model_variant == "stock":
-                view.home_joints_radians = list(REFERENCE_JOINTS)
-                view.home_gripper_radians = REFERENCE_GRIPPER_RADIANS
             if view.stage == "saved" and self.saved_command is not None:
                 view.command = self.saved_command(view.serial)
             return view
@@ -376,7 +363,7 @@ class CalibrationApplication:
         choosing_reset = action_name in {"reset_servos", "skip_servo_reset"}
         awaiting_choice = isinstance(session.state, Reference) and not self.servo_reset_decided
         if not choosing_reset:
-            if awaiting_choice and action_name in {"start_sweep", "capture_reference"}:
+            if awaiting_choice and action_name == "start_sweep":
                 raise ValueError("Choose whether to reset servos before the full sweep")
             return False
         if not awaiting_choice:
@@ -447,19 +434,32 @@ class CalibrationApplication:
         self.apply_motor_mapping(session, motor_id_mapping(ids))
 
     def apply_motor_mapping(self, session: CalibrationSession, motor_ids: dict[str, int]) -> None:
-        if not isinstance(session.state, Reference):
-            raise ValueError("Start a new calibration before changing the motor mapping")
+        state = session.state
+        full_sweep = isinstance(state, SweepRecording) and state.recalibration is None
+        if not isinstance(state, Reference) and not full_sweep:
+            raise ValueError("Motor mapping can only change before or during a full sweep")
         self.with_motor_ids(session.setup, motor_ids)
         session.require_torque_off()
         if motor_ids == session.setup.motor_ids:
             self.detected_base_motor = None
             return
         reset_decided = self.servo_reset_decided
+        old_ids = session.setup.motor_ids_in_joint_order()
+        old_registers = self.calibration_registers
         self.close_session()
         self.auto_connect = False
         self.connect(session.serial, motor_ids)
-        if self.session is not None:
-            self.session.restart()
+        assert self.session is not None
+        self.session.restart()
+        if isinstance(state, SweepRecording):
+            new_ids = self.session.setup.motor_ids_in_joint_order()
+            if any(
+                dict(zip(old_ids, values, strict=True))
+                != dict(zip(new_ids, self.calibration_registers[name], strict=True))
+                for name, values in old_registers.items()
+            ):
+                raise ValueError("Motor registers changed. Start a fresh sweep before saving.")
+            self.session.state = remap_full_sweep(state, old_ids, self.session.setup)
         self.servo_reset_decided = reset_decided
 
     def apply_session_action(self, session: CalibrationSession, action: Action) -> None:
@@ -477,16 +477,12 @@ class CalibrationApplication:
                 self.servo_reset_decided = False
             case StartSweepAction(joint_index=joint_index):
                 session.start_sweep(joint_index)
-            case SimpleAction(action="capture_reference"):
-                session.capture_reference()
             case SimpleAction(action="finish_sweep"):
                 session.finish_sweep()
             case ReverseAction(index=index):
                 session.reverse_joint(index)
             case AdjustAction(index=index, delta_radians=delta):
                 session.adjust_joint(index, delta)
-            case GripperEndpointAction(endpoint=endpoint):
-                session.capture_gripper_endpoint(endpoint)
             case SaveAction(model_verified=verified):
                 session.save(model_verified=verified)
 

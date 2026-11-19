@@ -13,7 +13,6 @@ from so101_setup.calibration import (
     HOME_JOINTS,
     CalibrationSession,
     Failed,
-    Recording,
     Reference,
     Review,
     Saved,
@@ -81,13 +80,10 @@ def session_at(
 
 
 def record_travel(session: CalibrationSession, bus: MemoryServoBus) -> None:
-    session.capture_reference()
-    bus.registers["present_position"] = [1800] * 6
-    session.view()
-    session.capture_gripper_endpoint("closed")
-    bus.registers["present_position"] = [2300] * 6
-    session.view()
-    session.capture_gripper_endpoint("open")
+    session.start_sweep()
+    for position in (2047, 600, 2047, 3494):
+        bus.registers["present_position"] = [position] * 6
+        session.view()
     session.finish_sweep()
 
 
@@ -109,14 +105,14 @@ def test_draft_is_read_only_and_save_creates_a_standalone_configuration(
     assert isinstance(session.state, Saved)
     calibration = read_calibration(session.directory / "calibration.json")
     assert calibration["shoulder_pan"].homing_offset == 100
-    assert calibration["shoulder_pan"].range_min == 1800
-    assert calibration["shoulder_pan"].range_max == 2300
-    assert calibration["wrist_roll"].range_min == 0
-    assert calibration["wrist_roll"].range_max == 4095
+    assert calibration["shoulder_pan"].range_min == 600
+    assert calibration["shoulder_pan"].range_max == 3494
+    assert calibration["wrist_roll"].range_min == 600
+    assert calibration["wrist_roll"].range_max == 3494
     setup = NativeSetupStore().load(session.directory, "ARM_A")
     assert setup.serial == "ARM_A"
     assert setup.model_variant == model_variant
-    assert setup.gripper.open_position_radians > setup.gripper.closed_position_radians
+    assert setup.gripper.open_position_radians != setup.gripper.closed_position_radians
     assert read_calibration(session.state.calibration) == calibration
     assert (session.state.backup / "registers.json").is_file()
     assert bus.registers["p_coefficient"] == [16, 32, 32, 16, 16, 16]
@@ -130,44 +126,19 @@ def test_draft_is_read_only_and_save_creates_a_standalone_configuration(
     assert bus.closed
 
 
-@pytest.mark.parametrize("reference_steps", [2047, 4095])
-def test_reversing_a_joint_preserves_its_reference_and_changes_the_live_direction(
+def test_reversing_a_joint_in_review_preserves_the_center_and_flips_direction(
     tmp_path: Path,
-    reference_steps: int,
 ) -> None:
     bus = MemoryServoBus()
-    bus.registers["present_position"][1] = reference_steps
     session = session_at(tmp_path, bus)
-    session.capture_reference()
+    record_travel(session, bus)
+    bus.registers["present_position"][1] = 2047
+    center = session.view().joints[1].position_radians
     session.reverse_joint(1)
-    reference = session.view()
-    assert reference.joints[1].position_radians == 0.0
-    bus.registers["present_position"][1] = (reference_steps + 100) % 4096
-    assert session.view().joints[1].position_radians < 0
-    assert bus.writes == []
-
-
-def test_sweeps_require_movement_and_refuse_an_encoder_wrap(tmp_path: Path) -> None:
-    bus = MemoryServoBus()
-    session = session_at(tmp_path, bus)
-    session.capture_reference()
-    with pytest.raises(ValueError, match="nonempty"):
-        session.finish_sweep()
-    assert isinstance(session.state, Recording)
-    for position in [1800, 2300]:
-        bus.registers["present_position"] = [position] * 6
-        session.view()
-    with pytest.raises(ValueError, match="Record distinct"):
-        session.finish_sweep()
-    # Gradual physical motion crosses zero between consecutive samples.
-    for position in [1000, 100, 4090]:
-        bus.registers["present_position"][0] = position
-        if position == 4090:
-            with pytest.raises(ValueError, match="encoder boundary"):
-                session.view()
-        else:
-            session.view()
-    assert bus.writes == []
+    assert session.view().joints[1].position_radians == pytest.approx(center)
+    bus.registers["present_position"][1] = 2147
+    assert session.view().joints[1].position_radians < center
+    assert not bus.writes
 
 
 def test_torque_and_operator_confirmation_gate_every_save(tmp_path: Path) -> None:
@@ -235,29 +206,6 @@ def test_matching_saved_calibration_skips_manual_steps_and_preserves_tuned_endpo
     assert "servos" not in tomllib.loads((session.directory / "setup.toml").read_text())
 
 
-def test_explicit_gripper_endpoints_can_be_inside_travel_and_in_reverse_encoder_order(
-    tmp_path: Path,
-) -> None:
-    bus = MemoryServoBus()
-    session = session_at(tmp_path, bus)
-    session.capture_reference()
-    session.reverse_joint(5)
-    for position in [1800, 2300]:
-        bus.registers["present_position"] = [position] * 6
-        session.view()
-    bus.registers["present_position"][5] = 2200
-    session.capture_gripper_endpoint("closed")
-    bus.registers["present_position"][5] = 1900
-    session.capture_gripper_endpoint("open")
-    session.finish_sweep()
-    session.save(model_verified=True)
-    setup = NativeSetupStore().load(session.directory, "ARM_A")
-    assert setup.gripper.closed_position_radians == pytest.approx(0.5153, abs=0.0001)
-    assert setup.gripper.open_position_radians == pytest.approx(0.9755, abs=0.0001)
-    entry = read_calibration(session.directory / "calibration.json")["gripper"]
-    assert (entry.range_min, entry.range_max) == (1800, 2300)
-
-
 def test_corrupt_saved_calibration_enters_a_read_only_repair_flow(
     tmp_path: Path,
 ) -> None:
@@ -269,20 +217,6 @@ def test_corrupt_saved_calibration_enters_a_read_only_repair_flow(
     assert isinstance(session.state, Reference)
     assert "could not be reused" in session.view().message
     assert bus.writes == []
-
-
-def test_an_endpoint_captured_while_the_hand_moves_is_inside_its_recorded_limits(
-    tmp_path: Path,
-) -> None:
-    bus = MemoryServoBus()
-    session = session_at(tmp_path, bus)
-    session.capture_reference()
-    bus.pending_positions = [[1810] * 6, [1800] * 6]
-    session.capture_gripper_endpoint("closed")
-    assert isinstance(session.state, Recording)
-    endpoint = session.state.closed_gripper_steps
-    assert endpoint is not None
-    assert session.state.draft.minimums[5] <= endpoint <= session.state.draft.maximums[5]
 
 
 def test_sweep_estimates_wrapped_wrist_and_gripper_without_writing_registers(
@@ -364,6 +298,7 @@ def test_recalibrating_one_joint_preserves_other_calibration_and_servo_settings(
 
     reopened = CalibrationSession(saved_setup, directory, session.calibration_root, bus)
     assert reopened.view().can_recalibrate_joint
+    bus.registers["present_position"][2] = 2047
     reopened.start_sweep(joint_index=3)
     with pytest.raises(ValueError, match="wrist flex: 0° recorded"):
         reopened.finish_sweep()
@@ -428,13 +363,11 @@ def test_reverse_calibration_writes_physical_joint_ranges_and_reopens(tmp_path: 
     setup = ArmSetup(serial="ARM_A", motor_ids=motor_id_mapping([6, 5, 4, 3, 2, 1]))
     directory = tmp_path / "arms/ARM_A"
     session = CalibrationSession(setup, directory, tmp_path / "live", bus)
-    session.capture_reference()
-    bus.registers["present_position"] = [1750, 1760, 1770, 1780, 1790, 1800]
-    session.view()
-    session.capture_gripper_endpoint("closed")
-    bus.registers["present_position"] = [2250, 2260, 2270, 2280, 2290, 2300]
-    session.view()
-    session.capture_gripper_endpoint("open")
+    session.start_sweep()
+    minimums = [600, 610, 620, 630, 640, 650]
+    for reading in (minimums, [2047] * 6, [4094 - value for value in minimums]):
+        bus.registers["present_position"] = reading
+        session.view()
     session.finish_sweep()
     session.save(model_verified=True)
 
@@ -442,9 +375,9 @@ def test_reverse_calibration_writes_physical_joint_ranges_and_reopens(tmp_path: 
     assert saved_setup.motor_ids_in_joint_order() == [6, 5, 4, 3, 2, 1]
     calibration_path = directory / "calibration.json"
     entries = read_calibration(calibration_path, [6, 5, 4, 3, 2, 1])
-    assert (entries["shoulder_pan"].id, entries["shoulder_pan"].range_min) == (6, 1800)
-    assert (entries["gripper"].id, entries["gripper"].range_min) == (1, 1750)
-    assert bus.registers["min_position_limit"] == [1750, 0, 1770, 1780, 1790, 1800]
+    assert (entries["shoulder_pan"].id, entries["shoulder_pan"].range_min) == (6, 650)
+    assert (entries["gripper"].id, entries["gripper"].range_min) == (1, 600)
+    assert bus.registers["min_position_limit"] == [600, 610, 620, 630, 640, 650]
 
     reopened = CalibrationSession(saved_setup, directory, tmp_path / "live", bus)
     assert isinstance(reopened.state, Review)
@@ -480,7 +413,7 @@ def test_unplugged_calibration_resumes_its_draft_only_on_the_original_board(
     assert application.view().stage == "reference"
     session = application.session
     assert session is not None
-    session.capture_reference()
+    session.start_sweep()
     original_bus.registers["present_position"] = [1800] * 6
     assert application.view().stage == "sweep"
     draft = session.state
@@ -513,3 +446,40 @@ def test_motor_order_check_uses_physical_id_and_ignores_tiny_encoder_wrap(tmp_pa
     application.check_motor_order(session)
     assert application.detected_base_motor == 6
     assert not bus.writes
+
+
+def test_remapped_sweep_keeps_motor_limits_and_highlights_in_range_motion(tmp_path: Path) -> None:
+    from so101_setup.calibration import remap_full_sweep
+
+    bus = MemoryServoBus()
+    session = session_at(tmp_path, bus, "soft-gripper-camera")
+    session.start_sweep()
+    session.view()
+    bus.registers["present_position"][5] = 2400
+    session.view()
+    bus.registers["present_position"][5] = 2200
+    view = session.view()
+    assert view.joints[5].moving
+    assert view.joints[5].range_max == 2400
+    assert not view.joints[3].moving
+
+    recording = session.state
+    assert isinstance(recording, SweepRecording)
+    mapping = motor_id_mapping([1, 2, 3, 6, 4, 5])
+    reassigned = ArmSetup(serial="ARM_A", motor_ids=mapping)
+    remapped = remap_full_sweep(recording, bus.driven_motor_ids, reassigned)
+    assert isinstance(remapped, SweepRecording)
+    assert remapped.sweeps[3].maximum == 2400
+    assert remapped.sweeps[5].maximum == 2047
+    assert not bus.writes
+
+
+def test_stock_sweep_uses_the_closed_home_sample_even_with_reversed_encoder(tmp_path: Path) -> None:
+    bus = MemoryServoBus()
+    session = session_at(tmp_path, bus, "stock")
+    bus.registers["present_position"][5] = 3494
+    record_travel(session, bus)
+    assert isinstance(session.state, Review)
+    closed, opened = session.state.gripper_endpoints
+    assert closed == pytest.approx(HOME_GRIPPER_RADIANS)
+    assert opened < closed
