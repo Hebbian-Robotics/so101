@@ -1,136 +1,38 @@
-import { useCallback, useEffect, useState } from "react";
-import { z } from "zod";
-
-const programmingOptionsSchema = z.object({
-  motors: z
-    .array(z.object({ id: z.number().int(), joint: z.string() }))
-    .length(6),
-  ports: z.array(z.object({ port: z.string(), description: z.string() })),
-});
-type ProgrammingOptions = z.infer<typeof programmingOptionsSchema>;
-type FollowerMotor = ProgrammingOptions["motors"][number];
-type BatchResult = "verified" | "skipped";
-
-const lastProgrammedMotorIdKey = "so101-last-programmed-motor-id";
-
-function readLastProgrammedMotorId(): number | undefined {
-  try {
-    const stored = window.localStorage.getItem(lastProgrammedMotorIdKey);
-    if (stored === null) return undefined;
-    const motorId = Number(stored);
-    return Number.isInteger(motorId) && motorId >= 1 && motorId <= 6
-      ? motorId
-      : undefined;
-  } catch {
-    return undefined;
-  }
-}
-
-function rememberProgrammedMotorId(motorId: number): void {
-  try {
-    window.localStorage.setItem(lastProgrammedMotorIdKey, String(motorId));
-  } catch {
-    // The current selection remains available even if browser storage is disabled.
-  }
-}
+import { useMachine } from "@xstate/react";
+import { RefreshCw } from "lucide-react";
+import { Button } from "@/components/ui/button";
+import { Checkbox } from "@/components/ui/checkbox";
+import {
+  NativeSelect,
+  NativeSelectOption,
+} from "@/components/ui/native-select";
+import {
+  type FollowerMotor,
+  getWizardSelection,
+  motorIdWizard,
+} from "./motor-id-wizard.js";
 
 function motorLabel(motor: FollowerMotor) {
   const joint = motor.joint.replaceAll("_", " ");
   return `${joint.charAt(0).toUpperCase()}${joint.slice(1)} (ID ${motor.id})`;
 }
 
-async function requestMotorIds(body?: object): Promise<unknown> {
-  const response = await fetch(
-    "/api/motor-ids",
-    body && {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(body),
-    },
-  );
-  const payload: unknown = await response.json();
-  if (!response.ok) {
-    const error = z.object({ message: z.string() }).safeParse(payload);
-    throw new Error(
-      error.success
-        ? error.data.message
-        : `Request failed (${response.status}).`,
-    );
-  }
-  return payload;
-}
-
-function errorMessage(error: unknown) {
-  return error instanceof Error ? error.message : String(error);
-}
-
 export function MotorIds() {
-  const [options, setOptions] = useState<ProgrammingOptions>();
-  const [selectedPort, setSelectedPort] = useState("");
-  const [mode, setMode] = useState<"batch" | "single">("batch");
-  const [batchResults, setBatchResults] = useState<BatchResult[]>([]);
-  const [singleMotorId, setSingleMotorId] = useState(readLastProgrammedMotorId);
+  const [snapshot, send] = useMachine(motorIdWizard);
+  const {
+    options,
+    mode,
+    batchResults,
+    singleMotorId,
+    verifiedMotorId: verifiedId,
+    error,
+  } = snapshot.context;
   const batchCount = batchResults.length;
-  const [verifiedId, setVerifiedId] = useState<number>();
-  const [isolated, setIsolated] = useState(false);
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState("");
-
-  const refreshAdapters = useCallback(async () => {
-    setError("");
-    try {
-      setOptions(programmingOptionsSchema.parse(await requestMotorIds()));
-    } catch (error) {
-      setError(errorMessage(error));
-    }
-  }, []);
-
-  useEffect(() => {
-    void refreshAdapters();
-  }, [refreshAdapters]);
-
-  const port = options?.ports.some((adapter) => adapter.port === selectedPort)
-    ? selectedPort
-    : options?.ports.length === 1
-      ? options.ports[0]?.port
-      : "";
-  const target =
-    mode === "batch"
-      ? options?.motors[batchCount]
-      : options?.motors.find((motor) => motor.id === singleMotorId);
-
-  function clearResult() {
-    setIsolated(false);
-    setVerifiedId(undefined);
-    setError("");
-  }
-
-  async function programMotor() {
-    if (busy || !port || !target || !isolated || verifiedId !== undefined)
-      return;
-    setBusy(true);
-    setError("");
-    try {
-      const result = z.object({ motor_id: z.number().int() }).parse(
-        await requestMotorIds({
-          port,
-          motor_id: target.id,
-          isolated_motor: true,
-        }),
-      );
-      if (result.motor_id !== target.id)
-        throw new Error("Unexpected motor ID returned.");
-      setVerifiedId(result.motor_id);
-      if (mode === "single") {
-        rememberProgrammedMotorId(result.motor_id);
-        setSingleMotorId(result.motor_id);
-      }
-    } catch (error) {
-      setError(errorMessage(error));
-    } finally {
-      setBusy(false);
-    }
-  }
+  const { port, motor: target } = getWizardSelection(snapshot.context);
+  const refreshingAdapters = snapshot.matches("refreshing");
+  const programming = snapshot.matches("programming");
+  const busy = refreshingAdapters || programming;
+  const isolated = snapshot.matches({ interactive: "confirmed" });
 
   return (
     <div className="workspace motor-workspace">
@@ -142,10 +44,7 @@ export function MotorIds() {
               type="radio"
               name="job"
               checked={mode === "batch"}
-              onChange={() => {
-                setMode("batch");
-                clearResult();
-              }}
+              onChange={() => send({ type: "selectMode", mode: "batch" })}
             />
             New follower batch
           </label>
@@ -154,10 +53,7 @@ export function MotorIds() {
               type="radio"
               name="job"
               checked={mode === "single"}
-              onChange={() => {
-                setMode("single");
-                clearResult();
-              }}
+              onChange={() => send({ type: "selectMode", mode: "single" })}
             />
             Program one ID
           </label>
@@ -174,39 +70,40 @@ export function MotorIds() {
             <p>
               Only motors marked verified have been programmed in this batch.
             </p>
-            <button
+            <Button
+              variant="outline"
               type="button"
-              onClick={() => {
-                setBatchResults([]);
-                clearResult();
-              }}
+              onClick={() => send({ type: "startNewBatch" })}
             >
               Start another batch
-            </button>
+            </Button>
           </>
         ) : (
           <>
             {mode === "single" && (
-              <label className="motor-field">
-                Follower joint
-                <select
+              <div className="motor-field">
+                <label htmlFor="follower-joint-id">Follower joint</label>
+                <NativeSelect
+                  id="follower-joint-id"
                   disabled={busy}
                   value={singleMotorId ?? ""}
-                  onChange={(event) => {
-                    setSingleMotorId(Number(event.target.value));
-                    clearResult();
-                  }}
+                  onChange={(event) =>
+                    send({
+                      type: "selectMotor",
+                      motorId: Number(event.target.value),
+                    })
+                  }
                 >
-                  <option value="" disabled>
+                  <NativeSelectOption value="" disabled>
                     Select a joint
-                  </option>
+                  </NativeSelectOption>
                   {options?.motors.map((motor) => (
-                    <option key={motor.id} value={motor.id}>
+                    <NativeSelectOption key={motor.id} value={motor.id}>
                       {motorLabel(motor)}
-                    </option>
+                    </NativeSelectOption>
                   ))}
-                </select>
-              </label>
+                </NativeSelect>
+              </div>
             )}
             {target && (
               <>
@@ -218,35 +115,37 @@ export function MotorIds() {
                 )}
               </>
             )}
-            <label className="motor-field">
-              USB servo adapter
-              <select
+            <div className="motor-field">
+              <label htmlFor="usb-servo-adapter">USB servo adapter</label>
+              <NativeSelect
+                id="usb-servo-adapter"
                 disabled={busy}
                 value={port ?? ""}
-                onChange={(event) => {
-                  setSelectedPort(event.target.value);
-                  clearResult();
-                }}
+                onChange={(event) =>
+                  send({ type: "selectPort", port: event.target.value })
+                }
               >
-                <option value="" disabled>
+                <NativeSelectOption value="" disabled>
                   {options?.ports.length
                     ? "Select an adapter"
                     : "No USB adapter detected"}
-                </option>
+                </NativeSelectOption>
                 {options?.ports.map((adapter) => (
-                  <option key={adapter.port} value={adapter.port}>
+                  <NativeSelectOption key={adapter.port} value={adapter.port}>
                     {adapter.description} ({adapter.port})
-                  </option>
+                  </NativeSelectOption>
                 ))}
-              </select>
-            </label>
-            <button
+              </NativeSelect>
+            </div>
+            <Button
+              variant="outline"
               type="button"
               disabled={busy}
-              onClick={() => void refreshAdapters()}
+              onClick={() => send({ type: "refreshAdapters" })}
             >
-              Refresh adapters
-            </button>
+              <RefreshCw aria-hidden="true" /> Refresh adapters
+            </Button>
+            {refreshingAdapters && <p role="status">Checking USB adapters…</p>}
             {target && verifiedId === undefined && (
               <>
                 <p>
@@ -254,35 +153,42 @@ export function MotorIds() {
                   STS3215 directly to the adapter, then turn servo power back
                   on.
                 </p>
-                <label className="motor-confirmation">
-                  <input
-                    type="checkbox"
+                <label className="motor-confirmation" htmlFor="motor-isolated">
+                  <Checkbox
+                    id="motor-isolated"
                     checked={isolated}
-                    disabled={busy}
-                    onChange={(event) => setIsolated(event.target.checked)}
+                    disabled={busy || !port}
+                    onCheckedChange={(checked) =>
+                      send({
+                        type:
+                          checked === true
+                            ? "confirmIsolation"
+                            : "withdrawConfirmation",
+                      })
+                    }
                   />
                   Only this loose motor is connected
                 </label>
-                <button
+                <Button
+                  className="mt-2.5 w-full"
+                  size="lg"
                   type="button"
                   disabled={busy || !port || !isolated}
-                  onClick={() => void programMotor()}
+                  onClick={() => send({ type: "programMotor" })}
                 >
-                  {busy ? "Programming…" : `Program ID ${target.id}`}
-                </button>
+                  {programming ? "Programming…" : `Program ID ${target.id}`}
+                </Button>
               </>
             )}
             {mode === "batch" && target && verifiedId === undefined && (
-              <button
+              <Button
+                variant="outline"
                 type="button"
                 disabled={busy}
-                onClick={() => {
-                  setBatchResults((results) => [...results, "skipped"]);
-                  clearResult();
-                }}
+                onClick={() => send({ type: "skipMotor" })}
               >
                 Skip {motorLabel(target)}
-              </button>
+              </Button>
             )}
             {target && verifiedId === target.id && (
               <>
@@ -290,20 +196,18 @@ export function MotorIds() {
                   <strong>Verified: {motorLabel(target)}</strong>
                 </p>
                 <p>Label the motor, then turn off servo power and unplug it.</p>
-                <button
+                <Button
+                  variant="outline"
                   type="button"
-                  onClick={() => {
-                    if (mode === "batch")
-                      setBatchResults((results) => [...results, "verified"]);
-                    clearResult();
-                  }}
+                  disabled={busy}
+                  onClick={() => send({ type: "continueAfterVerification" })}
                 >
                   {mode === "single"
                     ? `Program another ID ${target.id}`
                     : batchCount === 5
                       ? "Finish batch"
                       : "Next motor"}
-                </button>
+                </Button>
               </>
             )}
           </>
@@ -324,10 +228,12 @@ export function MotorIds() {
             >
               <span>{motorLabel(motor)}</span>
               {mode === "batch" && batchResults[index] === "skipped" ? (
-                <strong>Skipped</strong>
+                <strong className="motor-result">Skipped</strong>
               ) : (mode === "batch" && batchResults[index] === "verified") ||
                 verifiedId === motor.id ? (
-                <strong>Verified</strong>
+                <strong className="motor-result" data-verified>
+                  Verified
+                </strong>
               ) : null}
             </li>
           ))}

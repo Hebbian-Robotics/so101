@@ -35,7 +35,9 @@ from .calibration import (
 from .configuration import (
     DEFAULT_NEW_ARM_MODEL,
     MOTOR_IDS,
+    MOTOR_NAMES,
     ArmSetup,
+    ControllerSerial,
     ModelVariant,
     MotorIds,
     motor_id_mapping,
@@ -46,6 +48,8 @@ from .motor_ids import FOLLOWER_MOTORS, program_motor_id, programming_ports
 from .restore import restore_parameters
 from .runtime import asset_directory, setup_directory, setup_lock
 from .storage import NativeSetupStore, SetupStore
+
+MotorIndex = Annotated[int, Field(ge=0, lt=len(MOTOR_NAMES), strict=True)]
 
 
 class ActionModel(BaseModel):
@@ -60,7 +64,7 @@ class ProgramMotorAction(ActionModel):
 
 class ConnectAction(ActionModel):
     action: Literal["connect"]
-    serial: str = Field(pattern=r"^[A-Za-z0-9_-]+$")
+    serial: ControllerSerial
 
 
 class SimpleAction(ActionModel):
@@ -83,23 +87,24 @@ class MapMotorIdsAction(ActionModel):
 
 class StartSweepAction(ActionModel):
     action: Literal["start_sweep"]
-    joint_index: int | None = Field(default=None, ge=0, le=5, strict=True)
+    joint_index: MotorIndex | None = None
 
 
 class ReverseAction(ActionModel):
     action: Literal["reverse_joint"]
-    index: int = Field(ge=0, le=5)
+    index: MotorIndex
 
 
 class AdjustAction(ActionModel):
     action: Literal["adjust_joint"]
-    index: int = Field(ge=0, le=5)
+    index: MotorIndex
     delta_radians: float = Field(ge=-0.1, le=0.1, allow_inf_nan=False)
 
 
 class SaveAction(ActionModel):
     action: Literal["save"]
     model_verified: Literal[True]
+    review_revision: int = Field(ge=0, strict=True)
 
 
 Action = Annotated[
@@ -130,6 +135,7 @@ class ApplicationView(BaseModel):
     detected_base_motor: Literal[1, 6] | None = None
     servo_reset_incomplete: bool = False
     recalibrating_joint: int | None = None
+    review_revision: int | None = None
     gripper_opening: float = 0.5
     home_joints_radians: list[float] = Field(default_factory=lambda: list(HOME_JOINTS))
     home_gripper_radians: float = HOME_GRIPPER_RADIANS
@@ -146,13 +152,16 @@ class CalibrationApplication:
         calibration_root: Path,
         store: SetupStore | None = None,
         saved_command: Callable[[str], str] | None = None,
+        *,
+        auto_connect: bool = True,
     ) -> None:
         self.config_directory = config_directory.resolve()
         self.store = NativeSetupStore() if store is None else store
         self.saved_command = saved_command
         self.calibration_root = calibration_root
         self.session: CalibrationSession | None = None
-        self.auto_connect = True
+        self.review_revision = 0
+        self.auto_connect = auto_connect
         self.servo_reset_decided = False
         self.motor_order_sample: list[int] | None = None
         self.detected_base_motor: Literal[1, 6] | None = None
@@ -297,7 +306,11 @@ class CalibrationApplication:
                     return ApplicationView(
                         stage="disconnected",
                         controllers=controllers,
-                        message="Plug in an arm, or select its USB controller below.",
+                        message=(
+                            "Select a USB controller below."
+                            if controllers
+                            else "No USB controller detected."
+                        ),
                     )
             assert self.session is not None
             session = self.session
@@ -329,6 +342,8 @@ class CalibrationApplication:
             view.checking_motor_order = self.motor_order_sample is not None
             view.detected_base_motor = self.detected_base_motor
             view.model_variant = self.session.setup.model_variant
+            if view.stage == "review":
+                view.review_revision = self.review_revision
             if view.stage == "saved" and self.saved_command is not None:
                 view.command = self.saved_command(view.serial)
             return view
@@ -389,6 +404,7 @@ class CalibrationApplication:
                 if self.waiting_for_controller:
                     raise ValueError("Wait for the original controller to reconnect")
                 if self.handle_reset_choice(self.session, action):
+                    self.review_revision += 1
                     return self.view()
                 if isinstance(action, SimpleAction) and action.action == "check_motor_order":
                     self.check_motor_order(self.session)
@@ -399,6 +415,7 @@ class CalibrationApplication:
                     self.apply_detected_motor_order(self.session)
                 else:
                     self.apply_session_action(self.session, action)
+            self.review_revision += 1
             return self.view()
 
     def check_motor_order(self, session: CalibrationSession) -> None:
@@ -485,7 +502,9 @@ class CalibrationApplication:
                 session.reverse_joint(index)
             case AdjustAction(index=index, delta_radians=delta):
                 session.adjust_joint(index, delta)
-            case SaveAction(model_verified=verified):
+            case SaveAction(model_verified=verified, review_revision=revision):
+                if revision != self.review_revision:
+                    raise ValueError("Calibration changed. Review the current model before saving.")
                 session.save(model_verified=verified)
 
     def program_motor(self, action: ProgramMotorAction) -> int:
@@ -765,11 +784,15 @@ def command_line() -> None:
     )
     parser.add_argument("--assets", type=Path, default=asset_directory())
     parser.add_argument("--port", type=int, default=8795)
+    parser.add_argument(
+        "--no-auto-connect", action="store_true", help="Require manual controller selection."
+    )
     arguments = parser.parse_args()
     application = CalibrationApplication(
         arguments.setup_directory,
         calibration_root(),
         NativeSetupStore(arguments.model_variant),
+        auto_connect=not arguments.no_auto_connect,
     )
     serve_application(application, arguments.assets, arguments.port, setup_lock())
 

@@ -12,6 +12,7 @@ RADIANS_PER_STEP = math.tau / ENCODER_RESOLUTION
 class EncoderSweep:
     """Track a hand-moved single-turn encoder without losing seam crossings."""
 
+    reference: int
     previous: int
     minimum: int
     maximum: int
@@ -20,7 +21,7 @@ class EncoderSweep:
     def start(cls, position: int) -> "EncoderSweep":
         if not 0 <= position < ENCODER_RESOLUTION:
             raise ValueError("Encoder reading must be within one revolution")
-        return cls(position, position, position)
+        return cls(position, position, position, position)
 
     def record(self, position: int) -> int:
         if not 0 <= position < ENCODER_RESOLUTION:
@@ -44,6 +45,7 @@ class SweepEstimate:
     homing_offset: int
     range_min: int
     range_max: int
+    reference_steps: int
     model_offset_radians: float
 
 
@@ -51,15 +53,14 @@ def estimate_sweep(
     sweep: EncoderSweep,
     original_homing: int,
     sign: int,
-    nominal_center_radians: float,
+    reference_radians: float,
 ) -> SweepEstimate:
-    """Center a recorded arc and align its midpoint to a nominal model angle.
+    """Center the encoder range and align the captured reference to the model.
 
-    The model center is an estimate based on the selected assembly's expected
-    stops; it is not evidence that the operator reached the real hard stops.
+    The reference is only as accurate as the pose the operator captured.
     """
-    if sign not in (-1, 1) or not math.isfinite(nominal_center_radians):
-        raise ValueError("Expected a valid joint direction and finite model center")
+    if sign not in (-1, 1) or not math.isfinite(reference_radians):
+        raise ValueError("Expected a valid joint direction and finite reference angle")
     low, high = sweep.minimum, sweep.maximum
     if low >= high:
         raise ValueError("Sweep the joint through a nonempty range")
@@ -78,6 +79,9 @@ def estimate_sweep(
             original_homing - shift + ENCODER_RESOLUTION // 2
         ) % ENCODER_RESOLUTION - ENCODER_RESOLUTION // 2
         if 0 <= range_min < range_max < ENCODER_RESOLUTION and -2047 <= homing <= 2047:
-            model_offset = nominal_center_radians - sign * (midpoint - center) * RADIANS_PER_STEP
-            return SweepEstimate(homing, range_min, range_max, model_offset)
+            reference_steps = (sweep.reference + shift) % ENCODER_RESOLUTION
+            model_offset = (
+                reference_radians - sign * (reference_steps - ENCODER_MIDPOINT) * RADIANS_PER_STEP
+            )
+            return SweepEstimate(homing, range_min, range_max, reference_steps, model_offset)
     raise ValueError("Sweep cannot be represented by the servo's limits")

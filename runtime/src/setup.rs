@@ -1,7 +1,7 @@
 //! Native SO-101 setup file types shared by control applications.
 
 use crate::SO101_JOINT_NAMES;
-use crate::calibration::LerobotMotorCalibration;
+use crate::calibration::{calibration_by_motor_id, parse_named_calibration};
 use crate::settings::Sign;
 use anyhow::{Context, ensure};
 use serde::Deserialize;
@@ -187,19 +187,19 @@ impl MotorIds {
     /// # Errors
     /// The file cannot be read or the named entries do not match this order.
     pub fn validate_calibration_mapping(self, path: &Path) -> anyhow::Result<()> {
-        let entries: BTreeMap<String, LerobotMotorCalibration> =
-            serde_json::from_slice(&std::fs::read(path)?)
-                .with_context(|| format!("Invalid SO-101 calibration {}", path.display()))?;
+        let entries = parse_named_calibration(path, &std::fs::read(path)?)?;
         let joint_names = SO101_JOINT_NAMES.into_iter().chain(["gripper"]);
         let (joint_ids, gripper_id) = self.motor_ids_in_joint_order();
+        let motor_ids = joint_ids.into_iter().chain([gripper_id]);
         ensure!(
             entries.len() == 6
                 && joint_names
-                    .zip(joint_ids.into_iter().chain([gripper_id]))
+                    .zip(motor_ids.clone())
                     .all(|(name, id)| entries.get(name).is_some_and(|entry| entry.id == id)),
             "Calibration {} does not match the setup's motor ID mapping; recalibrate the arm",
             path.display()
         );
+        calibration_by_motor_id(entries.into_values(), motor_ids, path)?;
         Ok(())
     }
 }

@@ -19,7 +19,7 @@ def test_api_requires_session_authorization_and_static_requests_stay_inside_asse
     assets.mkdir()
     (assets / "index.html").write_text("Calibration UI")
     (tmp_path / "private.txt").write_text("Private config")
-    application = CalibrationApplication(tmp_path, tmp_path / "calibration")
+    application = CalibrationApplication(tmp_path, tmp_path / "calibration", auto_connect=False)
     with CalibrationHTTPServer(
         ("127.0.0.1", 0), request_handler(application, assets, "session-token")
     ) as server:
@@ -46,9 +46,8 @@ def test_api_requires_session_authorization_and_static_requests_stay_inside_asse
             response.read()
             connection.request("GET", "/api/state", headers={"Cookie": session_cookie})
             response = connection.getresponse()
-            # USB access may be busy when the real calibrator is running.
-            assert response.status in (200, 503)
-            response.read()
+            assert response.status == 200
+            assert json.loads(response.read())["stage"] == "disconnected"
             stream = HTTPConnection("127.0.0.1", server.server_port, timeout=5)
             stream.request("GET", "/api/events", headers={"Cookie": session_cookie})
             event_response = stream.getresponse()

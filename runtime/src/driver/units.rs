@@ -1,34 +1,19 @@
 //! Encoder units, alarms and the velocity estimate.
 
-use std::f64::consts::PI;
+use std::f64::consts::TAU;
 
-use rustypot::servo::feetech::sts3215::DEFINITION;
-
+pub(super) use crate::calibration::HOMING_STEPS;
+use crate::calibration::{STS3215_RESOLUTION, encoder_steps_to_radians};
 use crate::config::FeetechMotor;
 use crate::numeric;
 
-/// STS3215 magnetic encoder: 12 bits, 0.088 degrees per step (Feetech datasheet).
-const STS3215_ENCODER_RESOLUTION: u32 = 4096;
-/// `LeRobot`'s calibration turns the half-turn position into the calibration pose.
-pub(super) const HOMING_STEPS: f64 = 2047.0;
 /// Velocity estimates keep a short memory.
 pub(super) const VELOCITY_TIME_CONSTANT_SECONDS: f64 = 0.04;
-
-pub(super) fn resolution() -> f64 {
-    f64::from(
-        DEFINITION
-            .info
-            .resolution
-            .unwrap_or(STS3215_ENCODER_RESOLUTION),
-    )
-}
 
 /// A motor's joint angle for an encoder reading.
 #[must_use]
 pub fn steps_to_radians(steps: i64, motor: &FeetechMotor) -> f64 {
-    f64::from(motor.sign) * (numeric::register_value(steps) - HOMING_STEPS) * 2.0 * PI
-        / resolution()
-        + motor.offset_radians
+    encoder_steps_to_radians(steps, motor.sign, motor.offset_radians)
 }
 
 /// The encoder goal for a joint angle, rounding halves away from zero; a half
@@ -36,7 +21,10 @@ pub fn steps_to_radians(steps: i64, motor: &FeetechMotor) -> f64 {
 #[must_use]
 pub fn radians_to_steps(radians: f64, motor: &FeetechMotor) -> i64 {
     numeric::rounded(
-        f64::from(motor.sign) * (radians - motor.offset_radians) * resolution() / (2.0 * PI)
+        f64::from(motor.sign)
+            * (radians - motor.offset_radians)
+            * numeric::register_value(STS3215_RESOLUTION)
+            / TAU
             + HOMING_STEPS,
     )
 }

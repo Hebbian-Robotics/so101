@@ -1,7 +1,9 @@
 import { Canvas, useThree } from "@react-three/fiber";
+import { Box, RotateCcw } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { OrbitControls } from "three/addons/controls/OrbitControls.js";
 import type { URDFRobot } from "urdf-loader";
+import { Button } from "@/components/ui/button";
 import {
   colorRobot,
   disposeRobotMaterials,
@@ -12,6 +14,7 @@ import {
 
 type Position = [number, number, number];
 type SceneProps = {
+  title: string;
   darkMode: boolean;
   modelUrl?: string;
   jointNames: string[];
@@ -91,13 +94,18 @@ export function RobotScene(props: SceneProps) {
   return (
     <section className="robot-scene" aria-label="Robot visualization">
       <header>
-        <h2>Robot · 3D</h2>
-        <button
+        <h2>
+          <Box aria-hidden="true" />
+          {props.title}
+        </h2>
+        <Button
+          variant="outline"
+          size="sm"
           type="button"
           onClick={() => setResetCount((count) => count + 1)}
         >
-          Reset view
-        </button>
+          <RotateCcw aria-hidden="true" /> Reset view
+        </Button>
       </header>
       <div className="robot-scene-canvas">
         {!loaded ? (
@@ -113,7 +121,7 @@ export function RobotScene(props: SceneProps) {
             >
               <color
                 attach="background"
-                args={[props.darkMode ? "#17212b" : "#eeeeee"]}
+                args={[props.darkMode ? "#192737" : "#e9eff5"]}
               />
               <hemisphereLight args={[0xffffff, 0x888888, 1.5]} />
               <directionalLight position={[2, -3, 4]} intensity={1.5} />
@@ -121,8 +129,8 @@ export function RobotScene(props: SceneProps) {
                 args={[
                   2,
                   20,
-                  props.darkMode ? 0x657787 : 0xaaaaaa,
-                  props.darkMode ? 0x344553 : 0xd8d8d8,
+                  props.darkMode ? 0x607589 : 0x8a9fb2,
+                  props.darkMode ? 0x34485d : 0xd0dce7,
                 ]}
                 rotation={[Math.PI / 2, 0, 0]}
               />

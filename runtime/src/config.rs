@@ -1,6 +1,6 @@
 //! Per-arm hardware configuration, independent of station policy.
 
-use crate::calibration::{LerobotMotorCalibration, STS3215_RESOLUTION, load_calibration};
+use crate::calibration::{LerobotMotorCalibration, load_calibration, validate_encoder_calibration};
 use crate::settings::{FeetechSettings, Sign};
 use anyhow::Context;
 use serde::{Deserialize, Serialize};
@@ -130,7 +130,7 @@ pub fn load_arm_config(
         }),
         _ => None,
     };
-    Ok(FeetechConfig {
+    let config = FeetechConfig {
         port: settings
             .ports
             .get(arm)
@@ -143,7 +143,9 @@ pub fn load_arm_config(
         max_temperature_celsius: settings.max_temperature_celsius,
         min_voltage_volts: settings.min_voltage_volts,
         max_voltage_volts: settings.max_voltage_volts,
-    })
+    };
+    config.validate()?;
+    Ok(config)
 }
 
 impl FeetechConfig {
@@ -200,11 +202,21 @@ impl FeetechConfig {
             .chain(self.gripper.iter().map(|gripper| &gripper.motor))
         {
             let calibration = &motor.calibration;
+            validate_encoder_calibration(
+                motor.id,
+                calibration.homing_offset,
+                calibration.range_min,
+                calibration.range_max,
+            )?;
             anyhow::ensure!(
-                0 <= calibration.range_min
-                    && calibration.range_min < calibration.range_max
-                    && calibration.range_max < STS3215_RESOLUTION,
-                "Motor {} has an invalid calibrated range",
+                [
+                    motor.expected_gains.p,
+                    motor.expected_gains.i,
+                    motor.expected_gains.d
+                ]
+                .into_iter()
+                .all(|gain| u8::try_from(gain).is_ok()),
+                "Motor {} position gains must fit the servo registers",
                 motor.id
             );
             anyhow::ensure!(

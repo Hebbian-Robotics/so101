@@ -263,10 +263,11 @@ impl<B: ServoBus> Servos<B> {
     pub fn torque_enabled(&mut self) -> anyhow::Result<Vec<bool>> {
         self.read_driven("torque_enable")?
             .into_iter()
-            .map(|torque| match torque {
+            .zip(&self.driven_ids)
+            .map(|(torque, motor_id)| match torque {
                 0 => Ok(false),
                 1 => Ok(true),
-                _ => anyhow::bail!("Invalid torque-enable value: {torque}"),
+                _ => anyhow::bail!("Motor {motor_id}: Invalid torque-enable value: {torque}"),
             })
             .collect()
     }
@@ -281,7 +282,7 @@ impl<B: ServoBus> Servos<B> {
     fn read_environment_faults(
         &mut self,
         blocks: &[StateBlock],
-        torque: Option<&[i64]>,
+        torque: Option<&[bool]>,
         feedback: &mut Feedback,
     ) -> anyhow::Result<Vec<String>> {
         let mut faults = Vec::new();
@@ -359,7 +360,7 @@ impl<B: ServoBus> Servos<B> {
                     "{motor_id}: supply voltage {voltage:.1}V outside configured limits"
                 ));
             }
-            let lost_torque = torque.is_some_and(|torque| torque[index] == 0);
+            let lost_torque = torque.is_some_and(|torque| !torque[index]);
             if alarm != 0 || overheated || lost_torque {
                 faults.push(format!(
                     "{}: {}{}{} {temperature:.0}C{}",
@@ -390,8 +391,9 @@ impl<B: ServoBus> Servos<B> {
                 .last_torque_read
                 .is_none_or(|read| read.elapsed() >= TORQUE_READ_INTERVAL)
         {
+            let torque = self.torque_enabled()?;
             self.last_torque_read = Some(Instant::now());
-            Some(self.read_driven("torque_enable")?)
+            Some(torque)
         } else {
             None
         };
@@ -590,6 +592,7 @@ impl<B: ServoBus> Servos<B> {
             );
         }
         self.expect_torque = true;
+        self.last_torque_read = None;
         Ok(confirmed)
     }
     /// Read fresh hardware feedback into new buffers.
@@ -691,6 +694,7 @@ impl<B: ServoBus> Servos<B> {
         }
         self.bus.set_torque(&self.driven_ids, true)?;
         self.expect_torque = true;
+        self.last_torque_read = None;
         Ok(())
     }
 
@@ -703,6 +707,8 @@ impl<B: ServoBus> Servos<B> {
             self.expect_torque = false;
             self.last_torque_read = None;
             self.velocity_estimator = VelocityEstimator::new(self.arm_ids.len());
+            self.environment_readings
+                .fill_with(EnvironmentReadings::default);
         }
         reconnection
     }
@@ -712,13 +718,14 @@ impl<B: ServoBus> Servos<B> {
     /// # Errors
     /// A servo did not take it.
     pub fn release(&mut self) -> anyhow::Result<()> {
-        self.expect_torque = false;
         self.bus.set_torque(&self.all_ids, false)?;
         let torque = self.bus.read(&self.all_ids, "torque_enable")?;
         ensure!(
             torque.len() == self.all_ids.len() && torque.iter().all(|value| *value == 0),
             "Cannot confirm torque off for every motor; the arm may still be powered"
         );
+        self.expect_torque = false;
+        self.last_torque_read = None;
         Ok(())
     }
 }

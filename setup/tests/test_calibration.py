@@ -1,6 +1,7 @@
 """Calibration outcomes across encoder mapping, register writes and saved files."""
 
 import json
+import math
 import tomllib
 from pathlib import Path
 
@@ -22,6 +23,7 @@ from so101_setup.calibration import (
 )
 from so101_setup.configuration import ArmSetup, ModelVariant, ServoSettings, motor_id_mapping
 from so101_setup.device import RegisterBus
+from so101_setup.server import AdjustAction, CalibrationApplication, SaveAction
 from so101_setup.storage import NativeSetupStore
 
 
@@ -219,6 +221,31 @@ def test_corrupt_saved_calibration_enters_a_read_only_repair_flow(
     assert bus.writes == []
 
 
+def test_application_requires_confirmation_of_the_current_review(tmp_path: Path) -> None:
+    bus = MemoryServoBus()
+    session = session_at(tmp_path, bus)
+    record_travel(session, bus)
+    application = CalibrationApplication(tmp_path, session.calibration_root)
+    application.session = session
+    initial_revision = application.view().review_revision
+    assert initial_revision is not None
+
+    prior_angle = session.view().joints[0].position_radians
+    revised = application.act(AdjustAction(action="adjust_joint", index=0, delta_radians=0.01))
+    assert revised.joints[0].position_radians == pytest.approx(prior_angle + 0.01)
+    assert revised.review_revision is not None
+    with pytest.raises(ValueError, match="Calibration changed"):
+        application.act(
+            SaveAction(action="save", model_verified=True, review_revision=initial_revision)
+        )
+    assert bus.writes == []
+    saved = application.act(
+        SaveAction(action="save", model_verified=True, review_revision=revised.review_revision)
+    )
+    assert saved.stage == "saved"
+    assert saved.review_revision is None
+
+
 def test_sweep_estimates_wrapped_wrist_and_gripper_without_writing_registers(
     tmp_path: Path,
 ) -> None:
@@ -338,6 +365,69 @@ def test_recalibrating_one_joint_preserves_other_calibration_and_servo_settings(
         saved_registers[name][2] = expected
     saved_registers.pop("present_position")
     assert {name: bus.registers[name] for name in saved_registers} == saved_registers
+
+
+@pytest.mark.parametrize(("closed_position", "open_position"), [(1600, 3000), (3000, 1600)])
+def test_gripper_recalibration_preserves_the_closed_reference_when_reversed(
+    tmp_path: Path, closed_position: int, open_position: int
+) -> None:
+    bus = MemoryServoBus()
+    session = session_at(tmp_path, bus, "soft-gripper-camera")
+    record_travel(session, bus)
+    session.save(model_verified=True)
+    saved_setup = NativeSetupStore().load(session.directory, session.serial)
+    reopened = CalibrationSession(saved_setup, session.directory, session.calibration_root, bus)
+
+    bus.registers["present_position"][5] = closed_position
+    reopened.start_sweep(joint_index=5)
+    for position in (2300, open_position):
+        bus.registers["present_position"][5] = position
+        reopened.view()
+    reopened.finish_sweep()
+    assert reopened.view().gripper_opening == pytest.approx(1.0)
+
+    bus.registers["present_position"][5] = closed_position
+    assert reopened.view().gripper_opening == pytest.approx(0.0)
+    reopened.reverse_joint(5)
+    closed_view = reopened.view()
+    assert closed_view.gripper_opening == pytest.approx(0.0)
+    assert closed_view.joints[5].position_radians == pytest.approx(HOME_GRIPPER_RADIANS)
+    bus.registers["present_position"][5] = open_position
+    open_view = reopened.view()
+    assert open_view.gripper_opening == pytest.approx(1.0)
+    assert open_view.joints[5].position_radians - HOME_GRIPPER_RADIANS == pytest.approx(
+        (closed_position - open_position) * math.tau / 4096
+    )
+    reopened.save(model_verified=True)
+    updated_setup = NativeSetupStore().load(session.directory, session.serial)
+    assert updated_setup.gripper.closed_position_radians == pytest.approx(HOME_GRIPPER_RADIANS)
+    assert updated_setup.gripper.open_position_radians == pytest.approx(
+        open_view.joints[5].position_radians
+    )
+
+
+def test_discarding_joint_draft_requires_reconnect_if_saved_setup_changed(
+    tmp_path: Path,
+) -> None:
+    bus = MemoryServoBus()
+    session = session_at(tmp_path, bus)
+    record_travel(session, bus)
+    session.save(model_verified=True)
+    store = NativeSetupStore()
+    saved_setup = store.load(session.directory, session.serial)
+    reopened = CalibrationSession(saved_setup, session.directory, session.calibration_root, bus)
+    reopened.start_sweep(joint_index=0)
+    reopened.restart()
+    assert reopened.view().can_recalibrate_joint
+    reopened.start_sweep(joint_index=0)
+    updated_setup = saved_setup.model_copy(update={"model_variant": "soft-gripper-camera"})
+    setup_path = store.configuration_path(session.directory)
+    setup_path.write_bytes(store.encode(session.directory, updated_setup))
+
+    with pytest.raises(ValueError, match="Reconnect"):
+        reopened.restart()
+    assert not reopened.view().can_recalibrate_joint
+    assert store.load(session.directory, session.serial) == updated_setup
 
 
 def test_incomplete_gripper_sweep_can_be_completed_before_review(tmp_path: Path) -> None:

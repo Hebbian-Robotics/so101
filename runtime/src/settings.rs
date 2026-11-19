@@ -71,6 +71,23 @@ pub struct FeetechSettings {
 }
 
 impl FeetechSettings {
+    pub(crate) fn validate_joint_alignment(&self, joint_count: usize) -> anyhow::Result<()> {
+        ensure!(
+            !self.motor_ids.is_empty()
+                && self.motor_ids.len() == joint_count
+                && self.joint_signs.len() == joint_count
+                && self.joint_offsets_radians.len() == joint_count,
+            "Feetech motor ids, signs and offsets are per joint"
+        );
+        ensure!(
+            self.joint_offsets_radians
+                .iter()
+                .all(|offset| offset.is_finite()),
+            "Feetech joint offsets must be finite"
+        );
+        Ok(())
+    }
+
     /// The arm's joint motors, then the gripper's if there is one.
     #[must_use]
     pub fn driven_motor_ids(&self) -> Vec<u8> {
@@ -110,19 +127,10 @@ impl FeetechSettings {
                 && sorted_arms == self.calibration_ids.keys().collect::<Vec<_>>(),
             "Every arm needs a port and a calibration id"
         );
+        self.validate_joint_alignment(joint_count)?;
         ensure!(
-            !self.motor_ids.is_empty()
-                && self.motor_ids.len() == joint_count
-                && self.joint_signs.len() == joint_count
-                && self.joint_offsets_radians.len() == joint_count,
-            "Feetech motor ids, signs and offsets are per joint"
-        );
-        ensure!(
-            self.joint_offsets_radians
-                .iter()
-                .chain([&self.gripper_offset_radians])
-                .all(|offset| offset.is_finite()),
-            "Feetech offsets must be finite"
+            self.gripper_offset_radians.is_finite(),
+            "Feetech gripper offset must be finite"
         );
         ensure!(
             !self

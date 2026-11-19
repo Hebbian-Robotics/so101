@@ -7,7 +7,8 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 ControllerSerial = Annotated[str, Field(pattern=r"^[A-Za-z0-9_-]+$")]
 FiniteFloat = Annotated[float, Field(allow_inf_nan=False)]
 Sign = Literal[-1, 1]
-PositionGains = Annotated[list[int], Field(min_length=3, max_length=3)]
+ByteRegisterValue = Annotated[int, Field(ge=0, le=255, strict=True)]
+PositionGains = Annotated[list[ByteRegisterValue], Field(min_length=3, max_length=3)]
 SO101_JOINT_NAMES = [
     "shoulder_pan",
     "shoulder_lift",
@@ -70,7 +71,7 @@ class ServoSettings(SetupSection):
     # Starting configuration, not an empirically qualified tune for every arm.
     expected_position_gains: PositionGains = Field(default_factory=lambda: [16, 0, 32])
     expected_position_gains_by_motor: dict[int, PositionGains] = Field(default_factory=dict)
-    expected_return_delay_time: Annotated[int, Field(ge=0, le=255)] | None = 0
+    expected_return_delay_time: ByteRegisterValue | None = 0
 
 
 class ArmSetup(SetupSection):

@@ -11,7 +11,6 @@ import math
 import os
 import tempfile
 import time
-from copy import deepcopy
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
@@ -19,14 +18,17 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, model_validator
 
-from .configuration import MOTOR_IDS, SO101_JOINT_NAMES, ArmSetup
+from .configuration import MOTOR_IDS, MOTOR_NAMES, SO101_JOINT_NAMES, ArmSetup
 from .device import RegisterBus, apply_position_gains
 from .storage import NativeSetupStore, SetupStore
+from .sweep_estimation import (
+    ENCODER_MIDPOINT as HOMING_STEPS,
+)
+from .sweep_estimation import (
+    ENCODER_RESOLUTION as RESOLUTION,
+)
 from .sweep_estimation import EncoderSweep, estimate_sweep
 
-MOTOR_NAMES = (*SO101_JOINT_NAMES, "gripper")
-RESOLUTION = 4096
-HOMING_STEPS = 2047
 HOME_JOINTS = [-0.0037, -1.8435, 1.5765, 1.3296, -1.5536]
 HOME_GRIPPER_RADIANS = -0.12105
 # Generous lower bounds based on the observed soft-gripper SO-101 assembly.
@@ -46,6 +48,7 @@ CALIBRATION_REGISTERS = (
     "protection_current",
     "lock",
 )
+GRIPPER_INDEX = len(SO101_JOINT_NAMES)
 
 
 class MotorCalibration(BaseModel):
@@ -65,6 +68,15 @@ class MotorCalibration(BaseModel):
 
 Calibration = dict[str, MotorCalibration]
 CALIBRATION_ADAPTER = TypeAdapter(Calibration)
+
+
+def calibration_register_values(calibration: Calibration) -> dict[str, list[int]]:
+    motors = [calibration[name] for name in MOTOR_NAMES]
+    return {
+        "homing_offset": [motor.homing_offset for motor in motors],
+        "min_position_limit": [motor.range_min for motor in motors],
+        "max_position_limit": [motor.range_max for motor in motors],
+    }
 
 
 def read_calibration(path: Path, motor_ids: list[int] = MOTOR_IDS) -> Calibration:
@@ -126,7 +138,6 @@ class Reference:
 class SweepRecording:
     sweeps: dict[int, EncoderSweep]
     signs: list[int]
-    home_positions: list[int]
     recalibration: JointRecalibration | None = None
 
 
@@ -140,7 +151,6 @@ def remap_full_sweep(
     return SweepRecording(
         {index: recording.sweeps[old] for index, old in enumerate(old_indices)},
         list(recording.signs),
-        [recording.home_positions[old] for old in old_indices],
     )
 
 
@@ -148,15 +158,21 @@ def remap_full_sweep(
 class Review:
     draft: DraftCalibration
     gripper_endpoints: tuple[float, float]
-    estimated: bool = False
-    saved_baseline: bool = False
-    recalibration: JointRecalibration | None = None
+    source: Literal["estimated", "reopened", "saved"] | JointRecalibration
+
+    @property
+    def estimated(self) -> bool:
+        return self.source == "estimated" or isinstance(self.source, JointRecalibration)
+
+    @property
+    def recalibration(self) -> JointRecalibration | None:
+        return self.source if isinstance(self.source, JointRecalibration) else None
 
 
 @dataclass(frozen=True)
 class JointRecalibration:
     index: int
-    baseline: Review
+    baseline: Calibration
 
 
 @dataclass(frozen=True)
@@ -238,6 +254,13 @@ class CalibrationSession:
         self.last_view = self.view()
 
     def initial_state(self) -> Reference | Review:
+        calibration = self.load_matching_calibration()
+        if isinstance(calibration, Reference):
+            return calibration
+        source = "saved" if self.saved_setup_matches() else "reopened"
+        return self.review_calibration(calibration, source)
+
+    def load_matching_calibration(self) -> Reference | Calibration:
         calibration_path = self.directory / "calibration.json"
         if not calibration_path.exists():
             return Reference()
@@ -245,37 +268,39 @@ class CalibrationSession:
             entries = read_calibration(calibration_path, self.bus.driven_motor_ids)
         except (ValueError, OSError) as error:
             return Reference(f"Saved calibration could not be reused: {error}")
-        minimums = self.bus.read_registers("min_position_limit")
-        maximums = self.bus.read_registers("max_position_limit")
-        if self.bus.read_registers("homing_offset") != self.original_homing or not all(
-            (
-                entries[name].homing_offset,
-                entries[name].range_min,
-                entries[name].range_max,
-            )
-            == (self.original_homing[index], minimums[index], maximums[index])
-            for index, name in enumerate(MOTOR_NAMES)
+        if any(
+            self.bus.read_registers(register) != values
+            for register, values in calibration_register_values(entries).items()
+        ) or any(
+            entries[name].homing_offset != homing
+            for name, homing in zip(MOTOR_NAMES, self.original_homing, strict=True)
         ):
             return Reference(
                 "Saved calibration differs from the motor registers. Capture a new reference to recalibrate this arm."
             )
-        settings = self.setup.alignment
-        gripper = self.setup.gripper
+        return entries
+
+    def review_calibration(
+        self, calibration: Calibration, source: Literal["saved", "reopened"]
+    ) -> Review:
         return Review(
-            DraftCalibration(
-                homing_offsets=list(self.original_homing),
-                reference_steps=[HOMING_STEPS] * 6,
-                minimums=minimums,
-                maximums=maximums,
-                signs=[*settings.joint_signs, settings.gripper_sign],
-                offsets=[
-                    *settings.joint_offsets_radians,
-                    settings.gripper_offset_radians,
-                ],
-            ),
-            (gripper.closed_position_radians, gripper.open_position_radians),
-            saved_baseline=self.store.configuration_path(self.directory).is_file(),
+            self.draft_from_calibration(calibration), self.saved_gripper_endpoints(), source
         )
+
+    def draft_from_calibration(self, entries: Calibration) -> DraftCalibration:
+        settings = self.setup.alignment
+        return DraftCalibration(
+            homing_offsets=[entries[name].homing_offset for name in MOTOR_NAMES],
+            reference_steps=[HOMING_STEPS] * len(MOTOR_NAMES),
+            minimums=[entries[name].range_min for name in MOTOR_NAMES],
+            maximums=[entries[name].range_max for name in MOTOR_NAMES],
+            signs=[*settings.joint_signs, settings.gripper_sign],
+            offsets=[*settings.joint_offsets_radians, settings.gripper_offset_radians],
+        )
+
+    def saved_gripper_endpoints(self) -> tuple[float, float]:
+        gripper = self.setup.gripper
+        return gripper.closed_position_radians, gripper.open_position_radians
 
     def require_torque_off(self) -> None:
         if any(self.bus.read_registers("torque_enable", self.bus.all_motor_ids)):
@@ -292,9 +317,17 @@ class CalibrationSession:
         if isinstance(self.state, (Saved, Failed)):
             raise ValueError("Disconnect and reconnect before creating a new draft")
         if isinstance(self.state, (SweepRecording, Review)) and self.state.recalibration:
-            self.state = self.initial_state()
+            self.state = self.review_calibration(self.reload_saved_baseline(), "saved")
         else:
             self.state = Reference()
+
+    def reload_saved_baseline(self) -> Calibration:
+        calibration = self.load_matching_calibration()
+        if isinstance(calibration, Reference) or not self.saved_setup_matches():
+            raise ValueError(
+                "Saved calibration no longer matches the arm. Reconnect to inspect it."
+            )
+        return calibration
 
     def start_sweep(self, joint_index: int | None = None) -> None:
         """Capture the supported home pose and start a read-only sweep."""
@@ -306,31 +339,26 @@ class CalibrationSession:
         else:
             if not 0 <= joint_index < len(MOTOR_NAMES):
                 raise ValueError("Unknown joint")
-            if not isinstance(self.state, Review) or not self.state.saved_baseline:
+            if not isinstance(self.state, Review) or self.state.source != "saved":
                 raise ValueError("Single-joint recalibration requires a saved, matching arm setup")
-            baseline = self.initial_state()
-            if not isinstance(baseline, Review) or not baseline.saved_baseline:
-                raise ValueError(
-                    "Saved calibration no longer matches the arm. Reconnect to inspect it."
-                )
-            self.require_saved_setup()
-            recalibration = JointRecalibration(joint_index, baseline)
+            recalibration = JointRecalibration(joint_index, self.reload_saved_baseline())
             indices = range(joint_index, joint_index + 1)
         positions = self.read_positions()
         signs: list[int] = [*self.setup.alignment.joint_signs, self.setup.alignment.gripper_sign]
         self.state = SweepRecording(
             {index: EncoderSweep.start(positions[index]) for index in indices},
             signs,
-            list(positions),
             recalibration,
         )
 
-    def require_saved_setup(self) -> None:
-        if (
-            not self.store.configuration_path(self.directory).is_file()
-            or self.store.load(self.directory, self.serial) != self.setup
-        ):
-            raise ValueError("Saved setup changed. Reconnect before recalibrating a joint.")
+    def saved_setup_matches(self) -> bool:
+        try:
+            return (
+                self.store.configuration_path(self.directory).is_file()
+                and self.store.load(self.directory, self.serial) == self.setup
+            )
+        except (ValueError, OSError):
+            return False
 
     def finish_sweep(self) -> None:
         if not isinstance(self.state, SweepRecording):
@@ -351,7 +379,7 @@ class CalibrationSession:
             )
         recalibration = recording.recalibration
         draft = (
-            deepcopy(recalibration.baseline.draft)
+            self.draft_from_calibration(recalibration.baseline)
             if recalibration
             else DraftCalibration(
                 [0] * 6,
@@ -366,32 +394,32 @@ class CalibrationSession:
         for index, sweep in recording.sweeps.items():
             sign = recording.signs[index]
             old_homing = self.original_homing[index]
-            estimate = estimate_sweep(sweep, old_homing, sign, 0.0)
-            home_steps = rehomed_steps(
-                recording.home_positions[index], old_homing, estimate.homing_offset
-            )
+            estimate = estimate_sweep(sweep, old_homing, sign, reference_angles[index])
             draft.homing_offsets[index] = estimate.homing_offset
-            draft.reference_steps[index] = (estimate.range_min + estimate.range_max) // 2
+            draft.reference_steps[index] = estimate.reference_steps
             draft.minimums[index] = estimate.range_min
             draft.maximums[index] = estimate.range_max
-            draft.offsets[index] = reference_angles[index] - joint_radians(home_steps, sign, 0.0)
+            draft.offsets[index] = estimate.model_offset_radians
         draft.entries(self.bus.driven_motor_ids)
-        if recalibration and recalibration.index != 5:
-            endpoints = recalibration.baseline.gripper_endpoints
+        if recalibration and recalibration.index != GRIPPER_INDEX:
+            endpoints = self.saved_gripper_endpoints()
         else:
-            gripper_angles = [
-                joint_radians(position, draft.signs[5], draft.offsets[5])
-                for position in (draft.minimums[5], draft.maximums[5])
-            ]
-            # The home sample was captured with the physical gripper closed.
-            endpoints = tuple(
-                sorted(gripper_angles, key=lambda angle: abs(angle - HOME_GRIPPER_RADIANS))
-            )
-            endpoints = (endpoints[0], endpoints[1])
-        self.state = Review(draft, endpoints, estimated=True, recalibration=recalibration)
+            endpoints = self.swept_gripper_endpoints(draft)
+        self.state = Review(draft, endpoints, recalibration or "estimated")
+
+    def swept_gripper_endpoints(self, draft: DraftCalibration) -> tuple[float, float]:
+        minimum, maximum = draft.minimums[GRIPPER_INDEX], draft.maximums[GRIPPER_INDEX]
+        sign, offset = draft.signs[GRIPPER_INDEX], draft.offsets[GRIPPER_INDEX]
+        minimum_angle = joint_radians(minimum, sign, offset)
+        maximum_angle = joint_radians(maximum, sign, offset)
+        # Both assemblies start the sweep with the gripper closed.
+        reference = draft.reference_steps[GRIPPER_INDEX]
+        if abs(reference - minimum) <= abs(reference - maximum):
+            return minimum_angle, maximum_angle
+        return maximum_angle, minimum_angle
 
     def reverse_joint(self, index: int) -> None:
-        if not 0 <= index < 6:
+        if not 0 <= index < len(MOTOR_NAMES):
             raise ValueError("Unknown joint")
         if isinstance(self.state, Review):
             self.require_editable_joint(self.state, index)
@@ -423,7 +451,8 @@ class CalibrationSession:
     def require_editable_joint(self, review: Review, index: int) -> None:
         if review.recalibration and index != review.recalibration.index:
             raise ValueError("Only the selected joint can be adjusted during single-joint review")
-        review.saved_baseline = False
+        if review.source == "saved":
+            review.source = "reopened"
 
     def moving_motors(self, positions: list[int]) -> list[bool]:
         previous = self.previous_encoder_positions
@@ -448,6 +477,7 @@ class CalibrationSession:
                     if isinstance(self.state, Saved)
                     else self.state.message,
                     "command": "",
+                    "can_recalibrate_joint": False,
                     "configuration_path": str(self.state.configuration)
                     if isinstance(self.state, Saved)
                     else "",
@@ -522,7 +552,7 @@ class CalibrationSession:
             ],
             gripper_opening=max(0.0, min(1.0, opening)),
             estimated=review is not None and review.estimated,
-            can_recalibrate_joint=review is not None and review.saved_baseline,
+            can_recalibrate_joint=review is not None and review.source == "saved",
             recalibrating_joint=review.recalibration.index
             if review and review.recalibration
             else None,
@@ -539,22 +569,17 @@ class CalibrationSession:
         entries = draft.entries(motor_ids)
         recalibration = self.state.recalibration
         calibration_path = self.directory / "calibration.json"
-        updates = {
-            "homing_offset": [entries[name].homing_offset for name in MOTOR_NAMES],
-            "min_position_limit": [entries[name].range_min for name in MOTOR_NAMES],
-            "max_position_limit": [entries[name].range_max for name in MOTOR_NAMES],
-        }
+        updates = calibration_register_values(entries)
         registers = {
             register: self.bus.read_registers(register) for register in CALIBRATION_REGISTERS
         }
         if recalibration:
-            self.require_saved_setup()
-            baseline = recalibration.baseline.draft
-            if (
-                read_calibration(calibration_path, motor_ids) != baseline.entries(motor_ids)
-                or registers["homing_offset"] != baseline.homing_offsets
-                or registers["min_position_limit"] != baseline.minimums
-                or registers["max_position_limit"] != baseline.maximums
+            if not self.saved_setup_matches():
+                raise ValueError("Saved setup changed. Reconnect before recalibrating a joint.")
+            baseline = recalibration.baseline
+            if read_calibration(calibration_path, motor_ids) != baseline or any(
+                registers[register] != values
+                for register, values in calibration_register_values(baseline).items()
             ):
                 raise ValueError(
                     "Saved calibration changed. Reconnect before recalibrating a joint."

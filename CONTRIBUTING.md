@@ -22,7 +22,7 @@ Reruns preserve existing release assets, since applications pin their checksums.
 ## Code Quality
 
 ```bash
-lychee --offline README.md CONTRIBUTING.md docs/*.md runtime/README.md setup/README.md
+lychee --offline README.md CONTRIBUTING.md runtime/README.md setup/README.md setup/src/so101_setup/COORDINATES.md
 ```
 
 ### TypeScript

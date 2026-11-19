@@ -29,7 +29,21 @@ const records = z
   );
 const notices = [
   "Runtime dependency licenses for the SO-101 setup browser. Robot model licensing is in robot/so101/LICENSE.txt.",
+  "\nshadcn/ui registry components (MIT)\n",
+  readFileSync(
+    resolve(import.meta.dirname, "../licenses/shadcn-ui/LICENSE"),
+    "utf8",
+  ),
 ];
+for (const cssDependency of ["tailwindcss", "tw-animate-css"]) {
+  notices.push(
+    `\n${cssDependency} stylesheet (MIT)\n`,
+    readFileSync(
+      resolve(import.meta.dirname, "../node_modules", cssDependency, "LICENSE"),
+      "utf8",
+    ),
+  );
+}
 for (const record of Object.values(records).flat()) {
   notices.push(
     `\n${record.name} ${record.versions.join(", ")} (${record.license})\n`,

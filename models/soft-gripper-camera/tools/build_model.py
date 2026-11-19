@@ -188,56 +188,11 @@ def add_camera_module(
     )
 
 
-def build_model() -> None:
-    manifest = tomllib.loads((SOURCE_DIRECTORY / "sources.toml").read_text())
-    source = manifest["gripper"]
-    source_path = SOURCE_DIRECTORY / source["file"]
-    if hashlib.sha256(source_path.read_bytes()).hexdigest() != source["sha256"]:
-        raise ValueError("Gripper CAD does not match its pinned checksum")
-    imported_solids = cadquery.importers.importStep(str(source_path)).solids().vals()
-    solids: list[cadquery.Shape] = []
-    for imported_solid in imported_solids:
-        if not isinstance(imported_solid, cadquery.Solid):
-            raise TypeError("Expected solid CAD components")
-        solids.append(imported_solid)
-    if len(solids) != 5:
-        raise ValueError(
-            "Expected body, carrier, fixed finger, moving finger and camera mount"
-        )
-    body, carrier, fixed_finger, moving_finger, camera_mount = solids
-    attachment = wrist_attachment_transform(body)
-    mesh_prefix = "soft-gripper-camera"
-    meshes = {
-        "body": triangle_mesh(body, attachment),
-        "fixed_finger": triangle_mesh(fixed_finger, attachment),
-        "moving_carrier": triangle_mesh(carrier, attachment),
-        "moving_finger": triangle_mesh(moving_finger, attachment),
-        "camera_mount": triangle_mesh(camera_mount, attachment),
-    }
-    robot = ElementTree.parse(ASSET_DIRECTORY / "robot.urdf").getroot()
-    robot.set("name", "so101_soft_gripper_camera")
-    gripper = robot.find("link[@name='gripper_link']")
-    moving_jaw = robot.find("link[@name='moving_jaw_so101_v1_link']")
-    gripper_joint_origin = robot.find("joint[@name='gripper']/origin")
-    if gripper is None or moving_jaw is None or gripper_joint_origin is None:
-        raise ValueError("Stock model is missing its gripper joint frames")
-    for geometry_kind in ("visual", "collision"):
-        for element in list(gripper.findall(geometry_kind)):
-            mesh_element = element.find("geometry/mesh")
-            if (
-                mesh_element is not None
-                and mesh_element.get("filename") == "wrist_roll_follower_so101_v1.stl"
-            ):
-                gripper.remove(element)
-        for element in list(moving_jaw.findall(geometry_kind)):
-            moving_jaw.remove(element)
-    joint_position = numpy.array(
-        [float(value) for value in gripper_joint_origin.attrib["xyz"].split()]
-    )
-    joint_rotation = trimesh.transformations.euler_matrix(math.pi / 2, 0, 0)
-    joint_rotation[:3, 3] = joint_position
-    # The horn's square bolt pattern establishes the carrier's angular datum.
-    horn_centers = []
+def carrier_reference_angle(
+    carrier: cadquery.Shape, attachment: Vector, joint_position: Vector
+) -> float:
+    """Use the horn's square bolt pattern as the carrier's angular datum."""
+    horn_centers: list[Vector] = []
     for face in carrier.Faces():
         if face.geomType() != "CYLINDER":
             continue
@@ -261,7 +216,70 @@ def build_model() -> None:
     horn_direction = lower_holes[0] - lower_holes[1]
     if horn_direction[2] < 0:
         horn_direction = -horn_direction
-    reference_angle = math.atan2(-horn_direction[0], horn_direction[2])
+    return math.atan2(-horn_direction[0], horn_direction[2])
+
+
+def read_assembly_solids(
+    source_path: Path, expected_sha256: str
+) -> tuple[
+    cadquery.Solid, cadquery.Solid, cadquery.Solid, cadquery.Solid, cadquery.Solid
+]:
+    if hashlib.sha256(source_path.read_bytes()).hexdigest() != expected_sha256:
+        raise ValueError("Gripper CAD does not match its pinned checksum")
+    solids: list[cadquery.Solid] = []
+    for imported_solid in (
+        cadquery.importers.importStep(str(source_path)).solids().vals()
+    ):
+        if not isinstance(imported_solid, cadquery.Solid):
+            raise TypeError("Expected solid CAD components")
+        solids.append(imported_solid)
+    match solids:
+        case [body, carrier, fixed_finger, moving_finger, camera_mount]:
+            return body, carrier, fixed_finger, moving_finger, camera_mount
+        case _:
+            raise ValueError(
+                "Expected body, carrier, fixed finger, moving finger and camera mount"
+            )
+
+
+def build_model() -> None:
+    manifest = tomllib.loads((SOURCE_DIRECTORY / "sources.toml").read_text())
+    source = manifest["gripper"]
+    body, carrier, fixed_finger, moving_finger, camera_mount = read_assembly_solids(
+        SOURCE_DIRECTORY / source["file"], source["sha256"]
+    )
+    attachment = wrist_attachment_transform(body)
+    mesh_prefix = "soft-gripper-camera"
+    meshes = {
+        "body": triangle_mesh(body, attachment),
+        "fixed_finger": triangle_mesh(fixed_finger, attachment),
+        "moving_carrier": triangle_mesh(carrier, attachment),
+        "moving_finger": triangle_mesh(moving_finger, attachment),
+        "camera_mount": triangle_mesh(camera_mount, attachment),
+    }
+    robot = ElementTree.parse(ASSET_DIRECTORY / "robot.urdf").getroot()
+    robot.set("name", "so101_soft_gripper_camera")
+    gripper = robot.find("link[@name='gripper_link']")
+    moving_jaw = robot.find("link[@name='moving_jaw_so101_v1_link']")
+    gripper_joint_origin = robot.find("joint[@name='gripper']/origin")
+    if gripper is None or moving_jaw is None or gripper_joint_origin is None:
+        raise ValueError("Stock model is missing its gripper joint frames")
+    for geometry_kind in ("visual", "collision"):
+        for element in gripper.findall(geometry_kind):
+            mesh_element = element.find("geometry/mesh")
+            if (
+                mesh_element is not None
+                and mesh_element.get("filename") == "wrist_roll_follower_so101_v1.stl"
+            ):
+                gripper.remove(element)
+        for element in moving_jaw.findall(geometry_kind):
+            moving_jaw.remove(element)
+    joint_position = numpy.array(
+        [float(value) for value in gripper_joint_origin.attrib["xyz"].split()]
+    )
+    joint_rotation = trimesh.transformations.euler_matrix(math.pi / 2, 0, 0)
+    joint_rotation[:3, 3] = joint_position
+    reference_angle = carrier_reference_angle(carrier, attachment, joint_position)
     reference_rotation = trimesh.transformations.rotation_matrix(
         reference_angle, [0, 0, 1]
     )

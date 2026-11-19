@@ -1,7 +1,7 @@
 """Verify the installed wheel outside the checkout, including its actual HTTP CLI.
 
-Run with a built wheel path. The temporary setup store has no registered arms,
-so API discovery reads USB metadata and never opens a serial device.
+Run with a built wheel path. The CLI runs with auto-connect disabled, so API
+discovery reads USB metadata and never opens a serial device.
 """
 
 import argparse
@@ -76,6 +76,7 @@ assert (assets / 'robot/so101/LICENSE.txt').is_file()
                 "-I",
                 "-m",
                 "so101_setup.server",
+                "--no-auto-connect",
                 "--setup-directory",
                 str(directory / "setups"),
                 "--port",

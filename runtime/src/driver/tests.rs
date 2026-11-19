@@ -236,6 +236,12 @@ fn malformed_runtime_configuration_is_refused_before_constructing_servos() {
         ("oversized encoder range", |config| {
             config.joints[0].calibration.range_max = 4096;
         }),
+        ("unrepresentable homing offset", |config| {
+            config.joints[0].calibration.homing_offset = 2048;
+        }),
+        ("unrepresentable position gain", |config| {
+            config.joints[0].expected_gains.p = 256;
+        }),
         ("invalid return delay", |config| {
             config.expected_return_delay_time = Some(256);
         }),
@@ -453,6 +459,27 @@ fn torque_does_not_go_on_when_a_hold_goal_did_not_take() {
     let mut arm = servos(bus);
     assert!(arm.enable().is_err());
     assert_eq!(arm.bus.torque_changes.len(), 0);
+}
+
+#[test]
+fn feedback_rejects_invalid_torque_and_checks_again_after_unverified_release() {
+    let mut arm = servos(FakeBus::healthy());
+    arm.enable().unwrap();
+    arm.bus.set(1, "torque_enable", 2);
+    for _ in 0..2 {
+        let Err(error) = arm.read_feedback() else {
+            panic!("Feedback accepted an invalid torque reading");
+        };
+        let error = error.to_string();
+        assert!(error.contains("Invalid torque-enable value"), "{error}");
+    }
+    arm.bus.fail_reads = true;
+    assert!(arm.release().is_err());
+    arm.bus.fail_reads = false;
+    let feedback = arm.read_feedback().unwrap();
+    assert!(feedback.fault.unwrap().contains("torque off"));
+    arm.release().unwrap();
+    assert!(arm.read_feedback().unwrap().fault.is_none());
 }
 
 #[test]

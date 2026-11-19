@@ -31,7 +31,7 @@ def test_sweep_crossing_encoder_zero_preserves_angles_and_limits(
             sign * (new_position - ENCODER_MIDPOINT) * RADIANS_PER_STEP
             + estimate.model_offset_radians
         )
-        expected = 0.25 + sign * (unwrapped - (3800 + 5896) / 2) * RADIANS_PER_STEP
+        expected = 0.25 + sign * (unwrapped - 3800) * RADIANS_PER_STEP
         assert angle == pytest.approx(expected)
 
 

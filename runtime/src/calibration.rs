@@ -8,15 +8,15 @@
 //! turns the right way; the profile's signs and offsets absorb any difference.
 
 use std::collections::BTreeMap;
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 
 use anyhow::{Context, ensure};
 use serde::Deserialize;
 
-use super::settings::{FeetechSettings, Sign};
+use super::settings::FeetechSettings;
 
 /// The step count of the calibration pose.
-const HOMING_STEPS: f64 = 2047.0;
+pub(crate) const HOMING_STEPS: f64 = 2047.0;
 /// Encoder steps per turn of the Feetech STS3215.
 pub const STS3215_RESOLUTION: i64 = 4096;
 
@@ -80,12 +80,33 @@ pub fn load_calibration(
     arm: &str,
     calibration_root: &Path,
 ) -> anyhow::Result<BTreeMap<u8, LerobotMotorCalibration>> {
+    load_calibration_path(
+        settings,
+        &calibration_path_for_arm(settings, arm, calibration_root)?,
+    )
+}
+
+pub(crate) fn calibration_path_for_arm(
+    settings: &FeetechSettings,
+    arm: &str,
+    calibration_root: &Path,
+) -> anyhow::Result<PathBuf> {
     let calibration_id = settings
         .calibration_ids
         .get(arm)
         .with_context(|| format!("No calibration id for arm {arm}"))?;
-    let path = so_follower_calibration_path(calibration_root, calibration_id);
-    load_calibration_path(settings, &path)
+    ensure!(
+        !calibration_id.contains(['/', '\\'])
+            && matches!(
+                Path::new(calibration_id).components().next(),
+                Some(Component::Normal(_))
+            ),
+        "Calibration ID must be a single file name"
+    );
+    Ok(so_follower_calibration_path(
+        calibration_root,
+        calibration_id,
+    ))
 }
 
 /// Read and validate calibration entries at an explicit registry or local path.
@@ -96,12 +117,34 @@ pub fn load_calibration_path(
     settings: &FeetechSettings,
     path: &Path,
 ) -> anyhow::Result<BTreeMap<u8, LerobotMotorCalibration>> {
-    let text = std::fs::read_to_string(path)
+    let bytes = std::fs::read(path)
         .with_context(|| format!("Cannot read the calibration {}", path.display()))?;
-    let entries: BTreeMap<String, LerobotMotorCalibration> =
-        serde_json::from_str(&text).with_context(|| format!("Cannot parse {}", path.display()))?;
+    parse_calibration(settings, path, &bytes)
+}
+
+pub(crate) fn parse_calibration(
+    settings: &FeetechSettings,
+    path: &Path,
+    bytes: &[u8],
+) -> anyhow::Result<BTreeMap<u8, LerobotMotorCalibration>> {
+    let entries = parse_named_calibration(path, bytes)?;
+    calibration_by_motor_id(entries.into_values(), settings.driven_motor_ids(), path)
+}
+
+pub(crate) fn parse_named_calibration(
+    path: &Path,
+    bytes: &[u8],
+) -> anyhow::Result<BTreeMap<String, LerobotMotorCalibration>> {
+    serde_json::from_slice(bytes).with_context(|| format!("Cannot parse {}", path.display()))
+}
+
+pub(crate) fn calibration_by_motor_id(
+    entries: impl IntoIterator<Item = LerobotMotorCalibration>,
+    required_motor_ids: impl IntoIterator<Item = u8>,
+    path: &Path,
+) -> anyhow::Result<BTreeMap<u8, LerobotMotorCalibration>> {
     let mut by_id = BTreeMap::new();
-    for entry in entries.into_values() {
+    for entry in entries {
         let motor_id = entry.id;
         ensure!(
             by_id.insert(motor_id, entry).is_none(),
@@ -110,16 +153,21 @@ pub fn load_calibration_path(
         );
     }
     for entry in by_id.values() {
-        // LeRobot's motor bus refuses such a motor too: normalizing divides by it.
         ensure!(
-            entry.range_min != entry.range_max,
-            "Motor {} in {} has equal range_min and range_max",
+            entry.drive_mode == 0,
+            "Motor {} in {} must use drive_mode 0",
             entry.id,
             path.display()
         );
+        validate_encoder_calibration(
+            entry.id,
+            entry.homing_offset,
+            entry.range_min,
+            entry.range_max,
+        )
+        .with_context(|| format!("Invalid calibration in {}", path.display()))?;
     }
-    let missing: Vec<u8> = settings
-        .driven_motor_ids()
+    let missing: Vec<u8> = required_motor_ids
         .into_iter()
         .filter(|motor| !by_id.contains_key(motor))
         .collect();
@@ -131,10 +179,27 @@ pub fn load_calibration_path(
     Ok(by_id)
 }
 
-#[allow(clippy::cast_precision_loss, reason = "step counts are below 2^12")]
-fn steps_to_radians(steps: i64, sign: Sign, offset_radians: f64) -> f64 {
-    f64::from(sign.as_integer()) * (steps as f64 - HOMING_STEPS) * std::f64::consts::TAU
-        / STS3215_RESOLUTION as f64
+pub(crate) fn validate_encoder_calibration(
+    motor_id: u8,
+    homing_offset: i64,
+    minimum: i64,
+    maximum: i64,
+) -> anyhow::Result<()> {
+    const MAX_HOMING_OFFSET: i64 = STS3215_RESOLUTION / 2 - 1;
+    ensure!(
+        (-MAX_HOMING_OFFSET..=MAX_HOMING_OFFSET).contains(&homing_offset),
+        "Motor {motor_id} homing offset {homing_offset} does not fit the encoder"
+    );
+    ensure!(
+        0 <= minimum && minimum < maximum && maximum < STS3215_RESOLUTION,
+        "Motor {motor_id} has invalid calibrated range {minimum}..{maximum}"
+    );
+    Ok(())
+}
+
+pub(crate) fn encoder_steps_to_radians(steps: i64, sign: i32, offset_radians: f64) -> f64 {
+    f64::from(sign) * (crate::numeric::register_value(steps) - HOMING_STEPS) * std::f64::consts::TAU
+        / crate::numeric::register_value(STS3215_RESOLUTION)
         + offset_radians
 }
 
@@ -147,25 +212,18 @@ pub fn calibrated_joint_limits(
     arm: &str,
     calibration_root: &Path,
 ) -> anyhow::Result<Vec<(f64, f64)>> {
+    settings.validate_joint_alignment(settings.motor_ids.len())?;
     let calibration = load_calibration(settings, arm, calibration_root)?;
-    settings
+    Ok(settings
         .motor_ids
         .iter()
         .zip(&settings.joint_signs)
         .zip(&settings.joint_offsets_radians)
         .map(|((motor_id, sign), offset)| {
             let entry = &calibration[motor_id];
-            ensure!(
-                0 <= entry.range_min
-                    && entry.range_min < entry.range_max
-                    && entry.range_max < STS3215_RESOLUTION,
-                "Motor {motor_id} has invalid calibrated range {}..{} for resolution {STS3215_RESOLUTION}",
-                entry.range_min,
-                entry.range_max
-            );
-            let first = steps_to_radians(entry.range_min, *sign, *offset);
-            let second = steps_to_radians(entry.range_max, *sign, *offset);
-            Ok((first.min(second), first.max(second)))
+            let first = encoder_steps_to_radians(entry.range_min, sign.as_integer(), *offset);
+            let second = encoder_steps_to_radians(entry.range_max, sign.as_integer(), *offset);
+            (first.min(second), first.max(second))
         })
-        .collect()
+        .collect())
 }
