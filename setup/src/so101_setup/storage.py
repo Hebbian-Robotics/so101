@@ -47,7 +47,8 @@ class NativeSetupStore:
 
     @staticmethod
     def with_servo_defaults(directory: Path, setup: ArmSetup) -> ArmSetup:
-        shoulder_id, elbow_id = (2, 3) if setup.motor_id_order == "ascending" else (5, 4)
+        shoulder_id = setup.motor_ids["shoulder_lift"]
+        elbow_id = setup.motor_ids["elbow_flex"]
         override_path = directory / "servo-overrides.toml"
         register_settings = (
             ServoRegisterSettings.model_validate(tomllib.loads(override_path.read_text()))

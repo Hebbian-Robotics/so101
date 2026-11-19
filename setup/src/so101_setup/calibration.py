@@ -676,7 +676,7 @@ class CalibrationSession:
             {
                 "serial": self.serial,
                 "model_variant": self.setup.model_variant,
-                "motor_id_order": self.setup.motor_id_order,
+                "motor_ids": self.setup.motor_ids,
                 "alignment": {
                     "joint_signs": draft.signs[:5],
                     "joint_offsets_radians": draft.offsets[:5],

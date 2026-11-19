@@ -16,21 +16,43 @@ pub enum ModelVariant {
     SoftGripperCamera,
 }
 
-#[derive(Clone, Copy, Default, Deserialize)]
-#[serde(rename_all = "kebab-case")]
-pub enum MotorIdOrder {
-    #[default]
-    Ascending,
-    Descending,
+#[derive(Clone, Copy, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct MotorIds {
+    shoulder_pan: u8,
+    shoulder_lift: u8,
+    elbow_flex: u8,
+    wrist_flex: u8,
+    wrist_roll: u8,
+    gripper: u8,
 }
 
-impl MotorIdOrder {
+impl MotorIds {
     #[must_use]
     pub fn motor_ids_in_joint_order(self) -> ([u8; 5], u8) {
-        match self {
-            Self::Ascending => ([1, 2, 3, 4, 5], 6),
-            Self::Descending => ([6, 5, 4, 3, 2], 1),
-        }
+        (
+            [
+                self.shoulder_pan,
+                self.shoulder_lift,
+                self.elbow_flex,
+                self.wrist_flex,
+                self.wrist_roll,
+            ],
+            self.gripper,
+        )
+    }
+
+    fn validate(self) -> anyhow::Result<()> {
+        let (joints, gripper) = self.motor_ids_in_joint_order();
+        let mut ids = [
+            joints[0], joints[1], joints[2], joints[3], joints[4], gripper,
+        ];
+        ids.sort_unstable();
+        ensure!(
+            ids == [1, 2, 3, 4, 5, 6],
+            "Motor mapping must use IDs 1-6 exactly once"
+        );
+        Ok(())
     }
 }
 
@@ -40,8 +62,7 @@ pub struct ArmSetup {
     pub serial: String,
     #[serde(default)]
     pub model_variant: ModelVariant,
-    #[serde(default)]
-    pub motor_id_order: MotorIdOrder,
+    pub motor_ids: MotorIds,
     #[serde(default)]
     pub alignment: Alignment,
     #[serde(default)]
@@ -141,11 +162,12 @@ impl ArmSetup {
                 .all(|id| id.parse::<u8>().is_ok_and(|id| (1..=6).contains(&id))),
             "Gain overrides must name an SO-101 motor (IDs 1-6)"
         );
+        setup.motor_ids.validate()?;
         Ok(setup)
     }
 }
 
-impl MotorIdOrder {
+impl MotorIds {
     /// Check that the named calibration entries agree with the physical joint order.
     ///
     /// # Errors
@@ -155,19 +177,13 @@ impl MotorIdOrder {
             serde_json::from_slice(&std::fs::read(path)?)
                 .with_context(|| format!("Invalid SO-101 calibration {}", path.display()))?;
         let joint_names = SO101_JOINT_NAMES.into_iter().chain(["gripper"]);
-        // Older ascending setups could use calibration keys with only bus-level meaning.
-        if matches!(self, Self::Ascending)
-            && !joint_names.clone().any(|name| entries.contains_key(name))
-        {
-            return Ok(());
-        }
         let (joint_ids, gripper_id) = self.motor_ids_in_joint_order();
         ensure!(
             entries.len() == 6
                 && joint_names
                     .zip(joint_ids.into_iter().chain([gripper_id]))
                     .all(|(name, id)| entries.get(name).is_some_and(|entry| entry.id == id)),
-            "Calibration {} does not match the setup's motor ID order; recalibrate the arm",
+            "Calibration {} does not match the setup's motor ID mapping; recalibrate the arm",
             path.display()
         );
         Ok(())

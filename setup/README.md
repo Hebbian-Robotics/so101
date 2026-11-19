@@ -59,19 +59,11 @@ The default store is `$SO101_SETUP_DIRECTORY`, otherwise
 `$XDG_CONFIG_HOME/so101-setup` (defaulting to `~/.config/so101-setup`).
 
 Motor IDs may run from `1` to `6` or from `6` to `1` from the base to the
-gripper. The default is ascending. To calibrate an arm with descending IDs,
-use the USB serial shown in the calibration tool:
-
-```sh
-so101-calibrate --serial ARM_A --motor-id-order descending
-```
-
-For an arm with a saved order, omit both options to reuse it. To change the order
-back, use `--motor-id-order ascending` with the serial and record a fresh
-calibration. During live review, move shoulder pan and the gripper separately
-by hand with torque off. Confirm that each moves its matching joint in the
-preview before saving. Save records `motor_id_order` in `setup.toml` and leaves
-the programmed servo IDs intact.
+gripper. The default is ascending. For a different order, open **Edit motor mapping** before the sweep. Choose
+an ascending or descending shortcut, or assign each motor ID to a joint. IDs
+1 through 6 must each appear once. Move the joints by hand with torque off to
+verify the correspondence. Save records the mapping in the `[motor_ids]`
+table and leaves the programmed servo IDs intact.
 
 New arms default to the soft gripper with wrist camera and start calibration in
 the resting pose. For a stock gripper and midpoint reference pose, start with

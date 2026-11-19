@@ -32,7 +32,14 @@ from .calibration import (
     Reference,
     Saved,
 )
-from .configuration import DEFAULT_NEW_ARM_MODEL, ModelVariant, MotorIdOrder
+from .configuration import (
+    DEFAULT_NEW_ARM_MODEL,
+    MOTOR_IDS,
+    ArmSetup,
+    ModelVariant,
+    MotorIds,
+    motor_id_mapping,
+)
 from .device import RegisterBus, RegisterReadError
 from .discovery import ControllerChoice, discover_controllers
 from .motor_ids import FOLLOWER_MOTORS, program_motor_id, programming_ports
@@ -70,6 +77,11 @@ class SimpleAction(ActionModel):
     ]
 
 
+class MapMotorIdsAction(ActionModel):
+    action: Literal["map_motor_ids"]
+    motor_ids: MotorIds
+
+
 class StartSweepAction(ActionModel):
     action: Literal["start_sweep"]
     joint_index: int | None = Field(default=None, ge=0, le=5, strict=True)
@@ -99,6 +111,7 @@ class SaveAction(ActionModel):
 Action = Annotated[
     ConnectAction
     | SimpleAction
+    | MapMotorIdsAction
     | StartSweepAction
     | ReverseAction
     | AdjustAction
@@ -122,7 +135,7 @@ class ApplicationView(BaseModel):
     sweep_only: bool = False
     can_recalibrate_joint: bool = False
     offer_servo_reset: bool = False
-    motor_id_order: MotorIdOrder = "ascending"
+    motor_ids: dict[str, int] = Field(default_factory=lambda: motor_id_mapping(MOTOR_IDS))
     checking_motor_order: bool = False
     detected_base_motor: Literal[1, 6] | None = None
     servo_reset_incomplete: bool = False
@@ -143,13 +156,10 @@ class CalibrationApplication:
         calibration_root: Path,
         store: SetupStore | None = None,
         saved_command: Callable[[str], str] | None = None,
-        *,
-        motor_id_order_override: tuple[str, MotorIdOrder] | None = None,
     ) -> None:
         self.config_directory = config_directory.resolve()
         self.store = NativeSetupStore() if store is None else store
         self.saved_command = saved_command
-        self.motor_id_order_override = motor_id_order_override
         self.calibration_root = calibration_root
         self.session: CalibrationSession | None = None
         self.auto_connect = True
@@ -204,11 +214,7 @@ class CalibrationApplication:
             self.stream_stop.wait(0.2)
 
     def controllers(self) -> list[ControllerChoice]:
-        controllers = discover_controllers(self.config_directory, self.store)
-        if self.motor_id_order_override is None:
-            return controllers
-        override_serial, _ = self.motor_id_order_override
-        return [controller for controller in controllers if controller.serial == override_serial]
+        return discover_controllers(self.config_directory, self.store)
 
     @staticmethod
     def read_calibration_registers(bus: RegisterBus) -> dict[str, list[int]]:
@@ -217,7 +223,7 @@ class CalibrationApplication:
             for name in ("id", "homing_offset", "min_position_limit", "max_position_limit")
         }
 
-    def connect(self, serial: str, order: MotorIdOrder | None = None) -> None:
+    def connect(self, serial: str, motor_ids: dict[str, int] | None = None) -> None:
         if self.session is not None:
             raise ValueError("Disconnect the current arm before selecting another")
         candidates = [
@@ -228,18 +234,8 @@ class CalibrationApplication:
         controller = candidates[0]
         directory = self.config_directory / "arms" / serial
         setup = self.store.load(directory, serial)
-        if order is None and self.motor_id_order_override is not None:
-            _, order = self.motor_id_order_override
-        if order is not None and order != setup.motor_id_order:
-            gains = setup.servos.expected_position_gains_by_motor
-            servos = setup.servos.model_copy(
-                update={
-                    "expected_position_gains_by_motor": {
-                        7 - motor_id: values for motor_id, values in gains.items()
-                    }
-                }
-            )
-            setup = setup.model_copy(update={"motor_id_order": order, "servos": servos})
+        if motor_ids is not None:
+            setup = self.with_motor_ids(setup, motor_ids)
         bus = RegisterBus(controller.port, setup.motor_ids_in_joint_order())
         try:
             session = CalibrationSession(setup, directory, self.calibration_root, bus, self.store)
@@ -251,6 +247,23 @@ class CalibrationApplication:
         except Exception:
             bus.close()
             raise
+
+    @staticmethod
+    def with_motor_ids(setup: ArmSetup, motor_ids: dict[str, int]) -> ArmSetup:
+        remapped = ArmSetup.model_validate(setup.model_dump() | {"motor_ids": motor_ids})
+        old_gains = setup.servos.expected_position_gains_by_motor
+        gains = {
+            remapped.motor_ids[joint]: old_gains[old_id]
+            for joint, old_id in setup.motor_ids.items()
+            if old_id in old_gains
+        }
+        return remapped.model_copy(
+            update={
+                "servos": setup.servos.model_copy(
+                    update={"expected_position_gains_by_motor": gains}
+                )
+            }
+        )
 
     def reconnect(self, session: CalibrationSession) -> None:
         controller = next(
@@ -322,7 +335,7 @@ class CalibrationApplication:
                 return ApplicationView(stage="error", serial=session.serial, message=str(error))
             view.servo_reset_incomplete = session.serial in self.incomplete_servo_resets
             view.offer_servo_reset = view.stage == "reference" and not self.servo_reset_decided
-            view.motor_id_order = session.setup.motor_id_order
+            view.motor_ids = session.setup.motor_ids
             view.checking_motor_order = self.motor_order_sample is not None
             view.detected_base_motor = self.detected_base_motor
             view.model_variant = self.session.setup.model_variant
@@ -352,7 +365,7 @@ class CalibrationApplication:
                 except Exception as error:
                     raise RuntimeError(f"Reset stopped on motor {motor_id}: {error}") from error
         finally:
-            self.connect(serial, session.setup.motor_id_order)
+            self.connect(serial, session.setup.motor_ids)
             if self.session is not None:
                 self.session.restart()
         self.incomplete_servo_resets.discard(serial)
@@ -430,20 +443,29 @@ class CalibrationApplication:
     def apply_detected_motor_order(self, session: CalibrationSession) -> None:
         if not isinstance(session.state, Reference) or self.detected_base_motor is None:
             raise ValueError("Check which motor moves the base first")
-        order: MotorIdOrder = "ascending" if self.detected_base_motor == 1 else "descending"
-        if order == session.setup.motor_id_order:
+        ids = MOTOR_IDS if self.detected_base_motor == 1 else MOTOR_IDS[::-1]
+        self.apply_motor_mapping(session, motor_id_mapping(ids))
+
+    def apply_motor_mapping(self, session: CalibrationSession, motor_ids: dict[str, int]) -> None:
+        if not isinstance(session.state, Reference):
+            raise ValueError("Start a new calibration before changing the motor mapping")
+        self.with_motor_ids(session.setup, motor_ids)
+        session.require_torque_off()
+        if motor_ids == session.setup.motor_ids:
             self.detected_base_motor = None
             return
         reset_decided = self.servo_reset_decided
         self.close_session()
         self.auto_connect = False
-        self.connect(session.serial, order)
+        self.connect(session.serial, motor_ids)
         if self.session is not None:
             self.session.restart()
         self.servo_reset_decided = reset_decided
 
     def apply_session_action(self, session: CalibrationSession, action: Action) -> None:
         match action:
+            case MapMotorIdsAction(motor_ids=motor_ids):
+                self.apply_motor_mapping(session, motor_ids)
             case SimpleAction(action="reopen"):
                 if session.view().stage != "saved":
                     raise ValueError("Reopen is available after saving")
@@ -743,25 +765,13 @@ def command_line() -> None:
         default=DEFAULT_NEW_ARM_MODEL,
         help="Model for new arms (default: soft-gripper-camera). Saved arms keep their model.",
     )
-    parser.add_argument("--serial", help="USB serial of the arm whose motor ID order is being set")
-    parser.add_argument(
-        "--motor-id-order",
-        choices=("ascending", "descending"),
-        help="Motor IDs from base to gripper for the selected serial. Saved after calibration.",
-    )
     parser.add_argument("--assets", type=Path, default=asset_directory())
     parser.add_argument("--port", type=int, default=8795)
     arguments = parser.parse_args()
-    if (arguments.serial is None) != (arguments.motor_id_order is None):
-        parser.error("--serial and --motor-id-order must be used together")
-    motor_id_order_override = (
-        (arguments.serial, arguments.motor_id_order) if arguments.serial is not None else None
-    )
     application = CalibrationApplication(
         arguments.setup_directory,
         calibration_root(),
         NativeSetupStore(arguments.model_variant),
-        motor_id_order_override=motor_id_order_override,
     )
     serve_application(application, arguments.assets, arguments.port, setup_lock())
 

@@ -35,7 +35,7 @@ const viewSchema = z.object({
   sweep_only: z.boolean().default(false),
   can_recalibrate_joint: z.boolean(),
   offer_servo_reset: z.boolean().default(false),
-  motor_id_order: z.enum(["ascending", "descending"]).default("ascending"),
+  motor_ids: z.record(z.string(), z.number().int().min(1).max(6)).optional(),
   checking_motor_order: z.boolean().default(false),
   detected_base_motor: z
     .union([z.literal(1), z.literal(6)])
@@ -52,6 +52,7 @@ const viewSchema = z.object({
 type CalibrationView = z.infer<typeof viewSchema>;
 type Action =
   | { action: "connect"; serial: string }
+  | { action: "map_motor_ids"; motor_ids: Record<string, number> }
   | { action: "start_sweep"; joint_index?: number }
   | {
       action:
@@ -388,9 +389,85 @@ function App() {
                     <h2 id="motor-order-heading">Motor ID order</h2>
                     <p>
                       Current order:{" "}
-                      {view.motor_id_order === "ascending" ? "1 → 6" : "6 → 1"}{" "}
+                      {motorNames
+                        .map(
+                          (name, index) => view.motor_ids?.[name] ?? index + 1,
+                        )
+                        .join(" → ")}{" "}
                       from base to gripper.
                     </p>
+                    <details>
+                      <summary>Edit motor mapping</summary>
+                      <form
+                        key={JSON.stringify(view.motor_ids)}
+                        method="post"
+                        action="api/action"
+                        aria-labelledby="motor-mapping-legend"
+                        onSubmit={(event) => {
+                          event.preventDefault();
+                          const form = new FormData(event.currentTarget);
+                          void perform({
+                            action: "map_motor_ids",
+                            motor_ids: Object.fromEntries(
+                              motorNames.map((name) => [
+                                name,
+                                Number(form.get(name)),
+                              ]),
+                            ),
+                          });
+                        }}
+                      >
+                        <fieldset disabled={disabled}>
+                          <legend id="motor-mapping-legend">
+                            Assign IDs 1–6 once each
+                          </legend>
+                          {motorNames.map((name, index) => (
+                            <label
+                              className="motor-field"
+                              key={name}
+                              htmlFor={`mapping-${name}`}
+                            >
+                              {labels[name]}
+                              <select
+                                id={`mapping-${name}`}
+                                name={name}
+                                defaultValue={
+                                  view.motor_ids?.[name] ?? index + 1
+                                }
+                                required
+                              >
+                                {[1, 2, 3, 4, 5, 6].map((id) => (
+                                  <option key={id} value={id}>
+                                    {id}
+                                  </option>
+                                ))}
+                              </select>
+                            </label>
+                          ))}
+                          <button type="submit">Apply mapping</button>
+                          {[false, true].map((descending) => (
+                            <button
+                              type="button"
+                              key={String(descending)}
+                              onClick={() =>
+                                void perform({
+                                  action: "map_motor_ids",
+                                  motor_ids: Object.fromEntries(
+                                    motorNames.map((name, index) => [
+                                      name,
+                                      descending ? 6 - index : index + 1,
+                                    ]),
+                                  ),
+                                })
+                              }
+                            >
+                              Use {descending ? "descending" : "ascending"}{" "}
+                              order
+                            </button>
+                          ))}
+                        </fieldset>
+                      </form>
+                    </details>
                     {view.checking_motor_order ? (
                       <p role="status">
                         With torque off, gently turn only the base, then check

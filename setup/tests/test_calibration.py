@@ -21,7 +21,7 @@ from so101_setup.calibration import (
     joint_radians,
     read_calibration,
 )
-from so101_setup.configuration import ArmSetup, ModelVariant, ServoSettings
+from so101_setup.configuration import ArmSetup, ModelVariant, ServoSettings, motor_id_mapping
 from so101_setup.device import RegisterBus
 from so101_setup.storage import NativeSetupStore
 
@@ -348,7 +348,7 @@ def test_recalibrating_one_joint_preserves_other_calibration_and_servo_settings(
 ) -> None:
     motor_ids = [6, 5, 4, 3, 2, 1]
     bus = MemoryServoBus(motor_ids)
-    setup = ArmSetup(serial="ARM_A", motor_id_order="descending")
+    setup = ArmSetup(serial="ARM_A", motor_ids=motor_id_mapping([6, 5, 4, 3, 2, 1]))
     directory = tmp_path / "arms/ARM_A"
     session = CalibrationSession(setup, directory, tmp_path / "live", bus)
     record_travel(session, bus)
@@ -425,7 +425,7 @@ def test_incomplete_gripper_sweep_can_be_completed_before_review(tmp_path: Path)
 
 def test_reverse_calibration_writes_physical_joint_ranges_and_reopens(tmp_path: Path) -> None:
     bus = MemoryServoBus([6, 5, 4, 3, 2, 1])
-    setup = ArmSetup(serial="ARM_A", motor_id_order="descending")
+    setup = ArmSetup(serial="ARM_A", motor_ids=motor_id_mapping([6, 5, 4, 3, 2, 1]))
     directory = tmp_path / "arms/ARM_A"
     session = CalibrationSession(setup, directory, tmp_path / "live", bus)
     session.capture_reference()
@@ -439,7 +439,7 @@ def test_reverse_calibration_writes_physical_joint_ranges_and_reopens(tmp_path: 
     session.save(model_verified=True)
 
     saved_setup = NativeSetupStore().load(directory, "ARM_A")
-    assert saved_setup.motor_id_order == "descending"
+    assert saved_setup.motor_ids_in_joint_order() == [6, 5, 4, 3, 2, 1]
     calibration_path = directory / "calibration.json"
     entries = read_calibration(calibration_path, [6, 5, 4, 3, 2, 1])
     assert (entries["shoulder_pan"].id, entries["shoulder_pan"].range_min) == (6, 1800)

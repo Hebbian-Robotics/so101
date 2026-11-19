@@ -39,3 +39,20 @@ def test_registered_unknown_and_duplicate_controller_identities(tmp_path: Path) 
         ("KNOWN", "/dev/ttyUSB3", True),
         ("OTHER", "/dev/ttyUSB1", False),
     ]
+
+
+def test_scrambled_mapping_round_trips_and_assigns_gains_by_joint(tmp_path: Path) -> None:
+    store = NativeSetupStore()
+    mapping = {
+        "shoulder_pan": 6,
+        "shoulder_lift": 3,
+        "elbow_flex": 1,
+        "wrist_flex": 5,
+        "wrist_roll": 2,
+        "gripper": 4,
+    }
+    setup = ArmSetup(serial="ARM_A", motor_ids=mapping)
+    store.configuration_path(tmp_path).write_bytes(store.encode(tmp_path, setup))
+    loaded = store.load(tmp_path, "ARM_A")
+    assert loaded.motor_ids_in_joint_order() == [6, 3, 1, 5, 2, 4]
+    assert loaded.servos.expected_position_gains_by_motor == {3: [32, 0, 32], 1: [32, 0, 32]}

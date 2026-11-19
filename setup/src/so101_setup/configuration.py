@@ -18,7 +18,12 @@ SO101_JOINT_NAMES = [
 MOTOR_IDS = [1, 2, 3, 4, 5, 6]
 ModelVariant = Literal["stock", "soft-gripper-camera"]
 DEFAULT_NEW_ARM_MODEL: ModelVariant = "soft-gripper-camera"
-MotorIdOrder = Literal["ascending", "descending"]
+MOTOR_NAMES = (*SO101_JOINT_NAMES, "gripper")
+MotorIds = dict[str, Annotated[int, Field(strict=True, ge=1, le=6)]]
+
+
+def motor_id_mapping(ids: list[int]) -> dict[str, int]:
+    return dict(zip(MOTOR_NAMES, ids, strict=True))
 
 
 class SetupSection(BaseModel):
@@ -71,17 +76,21 @@ class ServoSettings(SetupSection):
 class ArmSetup(SetupSection):
     serial: ControllerSerial
     model_variant: ModelVariant = "stock"
-    motor_id_order: MotorIdOrder = "ascending"
+    motor_ids: MotorIds = Field(default_factory=lambda: motor_id_mapping(MOTOR_IDS))
     alignment: ModelAlignment = Field(default_factory=ModelAlignment)
     gripper: GripperEndpoints = Field(default_factory=GripperEndpoints)
     servos: ServoSettings = Field(default_factory=ServoSettings)
     servo_registers: ServoRegisterSettings = Field(default_factory=ServoRegisterSettings)
 
     def motor_ids_in_joint_order(self) -> list[int]:
-        return list(MOTOR_IDS) if self.motor_id_order == "ascending" else MOTOR_IDS[::-1]
+        return [self.motor_ids[name] for name in MOTOR_NAMES]
 
     @model_validator(mode="after")
     def require_known_gain_overrides(self) -> Self:
+        if set(self.motor_ids) != set(MOTOR_NAMES) or set(self.motor_ids.values()) != set(
+            MOTOR_IDS
+        ):
+            raise ValueError("Motor mapping must assign IDs 1-6 exactly once to the six joints")
         if set(self.servos.expected_position_gains_by_motor) - set(MOTOR_IDS):
             raise ValueError("Gain overrides must name an SO-101 motor (IDs 1-6)")
         return self
