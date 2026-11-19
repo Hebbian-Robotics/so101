@@ -27,6 +27,19 @@ pub struct MotorIds {
     gripper: u8,
 }
 
+impl Default for MotorIds {
+    fn default() -> Self {
+        Self {
+            shoulder_pan: 1,
+            shoulder_lift: 2,
+            elbow_flex: 3,
+            wrist_flex: 4,
+            wrist_roll: 5,
+            gripper: 6,
+        }
+    }
+}
+
 impl MotorIds {
     #[must_use]
     pub fn motor_ids_in_joint_order(self) -> ([u8; 5], u8) {
@@ -62,6 +75,7 @@ pub struct ArmSetup {
     pub serial: String,
     #[serde(default)]
     pub model_variant: ModelVariant,
+    #[serde(default)]
     pub motor_ids: MotorIds,
     #[serde(default)]
     pub alignment: Alignment,
