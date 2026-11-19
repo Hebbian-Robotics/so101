@@ -332,6 +332,68 @@ def test_saved_calibration_can_be_adjusted_without_losing_wrist_limits(tmp_path:
     )
 
 
+def test_recalibrating_one_joint_preserves_other_calibration_and_servo_settings(
+    tmp_path: Path,
+) -> None:
+    motor_ids = [6, 5, 4, 3, 2, 1]
+    bus = MemoryServoBus(motor_ids)
+    setup = ArmSetup(serial="ARM_A", motor_id_order="descending")
+    directory = tmp_path / "arms/ARM_A"
+    session = CalibrationSession(setup, directory, tmp_path / "live", bus)
+    record_travel(session, bus)
+    session.save(model_verified=True)
+    calibration_path = directory / "calibration.json"
+    saved = read_calibration(calibration_path, motor_ids)
+    saved_setup = NativeSetupStore().load(directory, "ARM_A")
+    bus.registers["p_coefficient"][0] = 27
+    bus.registers["return_delay_time"][2] = 7
+    bus.registers["lock"] = [1] * 6
+    saved_registers = {name: values.copy() for name, values in bus.registers.items()}
+    bus.writes.clear()
+
+    reopened = CalibrationSession(saved_setup, directory, session.calibration_root, bus)
+    assert reopened.view().can_recalibrate_joint
+    reopened.start_sweep(joint_index=3)
+    with pytest.raises(ValueError, match="wrist flex: 0° recorded"):
+        reopened.finish_sweep()
+    # Joint index 3 maps to motor ID 3 on this descending arm.
+    for position in (750, 2100, 3250):
+        bus.registers["present_position"][2] = position
+        reopened.view()
+    reopened.finish_sweep()
+    assert reopened.view().recalibrating_joint == 3
+    with pytest.raises(ValueError, match="Only the selected joint"):
+        reopened.adjust_joint(0, 0.01)
+    assert bus.writes == []
+    reopened.save(model_verified=True)
+
+    updated = read_calibration(calibration_path, motor_ids)
+    wrist = updated.pop("wrist_flex")
+    assert (wrist.id, wrist.homing_offset, wrist.range_min, wrist.range_max) == (3, -47, 797, 3297)
+    saved.pop("wrist_flex")
+    assert updated == saved
+    updated_setup = NativeSetupStore().load(directory, "ARM_A")
+    assert updated_setup.gripper == saved_setup.gripper
+    assert updated_setup.servos == saved_setup.servos
+    assert (
+        updated_setup.alignment.joint_offsets_radians[:3]
+        == saved_setup.alignment.joint_offsets_radians[:3]
+    )
+    assert (
+        updated_setup.alignment.joint_offsets_radians[4]
+        == saved_setup.alignment.joint_offsets_radians[4]
+    )
+    assert {motor_id for motor_id, _, _ in bus.writes} == {3}
+    for name, expected in (
+        ("homing_offset", -47),
+        ("min_position_limit", 797),
+        ("max_position_limit", 3297),
+    ):
+        saved_registers[name][2] = expected
+    saved_registers.pop("present_position")
+    assert {name: bus.registers[name] for name in saved_registers} == saved_registers
+
+
 def test_incomplete_gripper_sweep_can_be_completed_before_review(tmp_path: Path) -> None:
     bus = MemoryServoBus()
     session = session_at(tmp_path, bus, "soft-gripper-camera")

@@ -33,6 +33,15 @@ model before saving. The home pose is an estimate,
 so compare multiple positions. The stock-gripper variant uses its reference
 pose and explicit gripper endpoints.
 
+If one joint needs a fresh calibration, open the arm’s saved setup and choose
+**Recalibrate one joint** on the review screen. This option is available when
+the saved calibration matches the motor registers. Select the joint, set it
+to the reference shown, then start the sweep and move it by hand through its
+safe travel. Finish the sweep and confirm its live direction and alignment
+before saving. Save updates that joint’s calibration and leaves the other
+joints and servo gains intact. **Discard joint calibration** returns to the
+saved setup.
+
 The server reads motor positions and streams updates to the browser. Streaming
 does not increase the motor sampling rate; move slowly and pause at endpoints
 so the tool can record the full range.

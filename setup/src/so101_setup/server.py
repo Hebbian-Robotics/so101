@@ -23,9 +23,10 @@ from pydantic import BaseModel, ConfigDict, Field, TypeAdapter
 from .calibration import (
     HOME_GRIPPER_RADIANS,
     HOME_JOINTS,
+    REFERENCE_GRIPPER_RADIANS,
+    REFERENCE_JOINTS,
     CalibrationSession,
     JointView,
-    Reference,
 )
 from .configuration import ModelVariant, MotorIdOrder
 from .device import RegisterBus
@@ -51,9 +52,12 @@ class ConnectAction(ActionModel):
 
 
 class SimpleAction(ActionModel):
-    action: Literal[
-        "capture_reference", "start_sweep", "finish_sweep", "disconnect", "restart", "reopen"
-    ]
+    action: Literal["capture_reference", "finish_sweep", "disconnect", "restart", "reopen"]
+
+
+class StartSweepAction(ActionModel):
+    action: Literal["start_sweep"]
+    joint_index: int | None = Field(default=None, ge=0, le=5, strict=True)
 
 
 class ReverseAction(ActionModel):
@@ -80,6 +84,7 @@ class SaveAction(ActionModel):
 Action = Annotated[
     ConnectAction
     | SimpleAction
+    | StartSweepAction
     | ReverseAction
     | AdjustAction
     | GripperEndpointAction
@@ -100,6 +105,8 @@ class ApplicationView(BaseModel):
     gripper_open_recorded: bool = False
     estimated: bool = False
     sweep_only: bool = False
+    can_recalibrate_joint: bool = False
+    recalibrating_joint: int | None = None
     gripper_opening: float = 0.5
     home_joints_radians: list[float] = Field(default_factory=lambda: list(HOME_JOINTS))
     home_gripper_radians: float = HOME_GRIPPER_RADIANS
@@ -215,6 +222,9 @@ class CalibrationApplication:
             assert self.session is not None
             view = ApplicationView.model_validate(self.session.view().model_dump())
             view.model_variant = self.session.setup.model_variant
+            if view.model_variant == "stock":
+                view.home_joints_radians = list(REFERENCE_JOINTS)
+                view.home_gripper_radians = REFERENCE_GRIPPER_RADIANS
             if view.stage == "saved" and self.saved_command is not None:
                 view.command = self.saved_command(view.serial)
             return view
@@ -237,11 +247,9 @@ class CalibrationApplication:
                         self.session = None
                         self.connect(serial)
                     case SimpleAction(action="restart"):
-                        if self.session.view().stage in {"saved", "error"}:
-                            raise ValueError("Disconnect and reconnect before creating a new draft")
-                        self.session.state = Reference()
-                    case SimpleAction(action="start_sweep"):
-                        self.session.start_sweep()
+                        self.session.restart()
+                    case StartSweepAction(joint_index=joint_index):
+                        self.session.start_sweep(joint_index)
                     case SimpleAction(action="capture_reference"):
                         self.session.capture_reference()
                     case SimpleAction(action="finish_sweep"):

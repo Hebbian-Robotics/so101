@@ -33,6 +33,8 @@ const viewSchema = z.object({
   gripper_opening: z.number().finite(),
   estimated: z.boolean().default(false),
   sweep_only: z.boolean().default(false),
+  can_recalibrate_joint: z.boolean(),
+  recalibrating_joint: z.number().int().min(0).max(5).nullable(),
   home_joints_radians: z.array(z.number().finite()).length(5),
   home_gripper_radians: z.number().finite(),
   message: z.string(),
@@ -42,11 +44,11 @@ const viewSchema = z.object({
 type CalibrationView = z.infer<typeof viewSchema>;
 type Action =
   | { action: "connect"; serial: string }
+  | { action: "start_sweep"; joint_index?: number }
   | {
       action:
         | "disconnect"
         | "capture_reference"
-        | "start_sweep"
         | "finish_sweep"
         | "restart"
         | "reopen";
@@ -62,6 +64,7 @@ const jointNames = [
   "wrist_flex",
   "wrist_roll",
 ];
+const motorNames = [...jointNames, "gripper"];
 const labels: Record<string, string> = {
   shoulder_pan: "Shoulder pan",
   shoulder_lift: "Shoulder lift",
@@ -163,6 +166,7 @@ function App() {
   const [actionError, setActionError] = useState("");
   const [busy, setBusy] = useState(false);
   const [verified, setVerified] = useState(false);
+  const [jointToRecalibrate, setJointToRecalibrate] = useState("");
   const acting = useRef(false);
   const eventStream = useRef<EventSource | null>(null);
   const [streamGeneration, setStreamGeneration] = useState(0);
@@ -214,6 +218,7 @@ function App() {
     setActionError("");
     try {
       setView(await requestView(action));
+      setJointToRecalibrate("");
       setConnectionError("");
     } catch (error) {
       setActionError(error instanceof Error ? error.message : String(error));
@@ -226,6 +231,15 @@ function App() {
   const stage = view?.stage ?? "disconnected";
   const connected = Boolean(view?.serial);
   const disabled = busy || Boolean(connectionError);
+  const recalibratingJoint = view?.recalibrating_joint ?? null;
+  const recalibratingName =
+    recalibratingJoint === null
+      ? null
+      : labels[motorNames[recalibratingJoint] ?? ""];
+  const showReference =
+    stage === "reference" ||
+    Boolean(view?.can_recalibrate_joint && jointToRecalibrate);
+  const softGripper = view?.model_variant === "soft-gripper-camera";
   const sceneArms = [
     {
       arm: "follower",
@@ -408,12 +422,23 @@ function App() {
                 ) : null}
                 {stage === "sweep" && view?.sweep_only ? (
                   <>
-                    <h2>Record safe travel</h2>
-                    <p>
-                      Support the arm. Slowly move each joint from one gentle
-                      stop to the other, including wrist rotation. Fully close
-                      and open the gripper without forcing it.
-                    </p>
+                    <h2>
+                      {recalibratingName
+                        ? `Sweep ${recalibratingName}`
+                        : "Record safe travel"}
+                    </h2>
+                    {recalibratingName ? (
+                      <p>
+                        Support the arm and slowly move the selected joint from
+                        one gentle stop to the other.
+                      </p>
+                    ) : (
+                      <p>
+                        Support the arm. Slowly move each joint from one gentle
+                        stop to the other, including wrist rotation. Fully close
+                        and open the gripper without forcing it.
+                      </p>
+                    )}
                     <p>
                       Move slowly enough for the readings to follow. The model
                       appears after you finish the sweep.
@@ -484,18 +509,21 @@ function App() {
                 ) : null}
                 {stage === "review" ? (
                   <>
-                    <h2>Check the live model</h2>
+                    <h2>
+                      {recalibratingName
+                        ? `Review ${recalibratingName}`
+                        : "Check the live model"}
+                    </h2>
                     <p>
-                      Move the supported arm by hand. Check the joint
-                      directions, wrist orientation, and gripper. Sweep-based
-                      alignment is an estimate; adjust any joint that does not
-                      match before saving.
+                      {recalibratingName
+                        ? "Move the selected joint by hand. Check its direction and alignment in the model and adjust if needed."
+                        : "Move the supported arm by hand. Check the joint directions, wrist orientation, and gripper. Adjust the model where needed."}
                     </p>
                     <label className="verification">
                       <input
                         type="checkbox"
                         checked={verified}
-                        disabled={disabled}
+                        disabled={disabled || showReference}
                         onChange={(event) => setVerified(event.target.checked)}
                       />
                       The model follows this physical arm correctly.
@@ -503,18 +531,75 @@ function App() {
                     <button
                       className="primary"
                       type="button"
-                      disabled={disabled || !verified}
+                      disabled={disabled || showReference || !verified}
                       onClick={() =>
                         void perform({ action: "save", model_verified: true })
                       }
                     >
-                      {busy ? "Saving…" : "Save setup"}
+                      {busy
+                        ? "Saving…"
+                        : recalibratingName
+                          ? "Save joint calibration"
+                          : "Save setup"}
                     </button>
                     <p className="detail">
-                      Save backs up existing files, verifies calibration and
-                      gain registers with torque off, and updates this arm’s
-                      setup files.
+                      {recalibratingName
+                        ? "Save backs up the existing setup and verifies the selected joint’s calibration with torque off."
+                        : "Save backs up existing files, verifies calibration and gain registers with torque off, and updates this arm’s setup files."}
                     </p>
+                    {view?.can_recalibrate_joint ? (
+                      <form
+                        aria-labelledby="recalibrate-joint-heading"
+                        action="api/action"
+                        method="post"
+                        onSubmit={(event) => {
+                          event.preventDefault();
+                          if (!jointToRecalibrate) return;
+                          void perform({
+                            action: "start_sweep",
+                            joint_index: Number(jointToRecalibrate),
+                          });
+                        }}
+                      >
+                        <h3 id="recalibrate-joint-heading">
+                          Recalibrate one joint
+                        </h3>
+                        <label className="motor-field">
+                          Joint to sweep
+                          <select
+                            name="joint_index"
+                            required
+                            disabled={disabled}
+                            value={jointToRecalibrate}
+                            onChange={(event) => {
+                              setJointToRecalibrate(event.target.value);
+                              setVerified(false);
+                            }}
+                          >
+                            <option value="">Choose a joint</option>
+                            {motorNames.map((name, index) => (
+                              <option key={name} value={index}>
+                                {labels[name]}
+                              </option>
+                            ))}
+                          </select>
+                        </label>
+                        <p className="detail" id="joint-reference-instructions">
+                          Support and disable the arm. Match the selected joint
+                          to the reference pose before starting the sweep.
+                          {softGripper
+                            ? " For the gripper, start fully closed."
+                            : " For the gripper, start about 43° open."}
+                        </p>
+                        <button
+                          type="submit"
+                          disabled={disabled}
+                          aria-describedby="joint-reference-instructions"
+                        >
+                          Start joint sweep
+                        </button>
+                      </form>
+                    ) : null}
                   </>
                 ) : null}
                 {stage === "saved" ? (
@@ -562,7 +647,9 @@ function App() {
                           void perform({ action: "restart" });
                         }}
                       >
-                        Start new calibration
+                        {recalibratingName
+                          ? "Discard joint calibration"
+                          : "Start new calibration"}
                       </button>
                     ) : null}
                     <button
@@ -589,7 +676,7 @@ function App() {
                   <RobotScene
                     darkMode={darkMode}
                     modelUrl={
-                      view?.model_variant === "soft-gripper-camera"
+                      softGripper
                         ? "robot/so101/robot-soft-gripper-camera.urdf"
                         : "robot/so101/robot.urdf"
                     }
@@ -597,23 +684,23 @@ function App() {
                     cameraTarget={calibrationCameraTarget}
                     jointNames={jointNames}
                     measuredJoints={
-                      stage === "reference" &&
-                      view?.model_variant === "soft-gripper-camera"
-                        ? view.home_joints_radians
-                        : stage === "reference"
-                          ? []
-                          : (sceneArms[0]?.measuredJoints ?? [])
+                      showReference
+                        ? (view?.home_joints_radians ?? [])
+                        : (sceneArms[0]?.measuredJoints ?? [])
                     }
                     gripperAngleRadians={
-                      stage === "reference"
+                      showReference
                         ? view?.home_gripper_radians
                         : sceneArms[0]?.gripperAngleRadians
                     }
                   />
                 )}
-                {stage === "reference" &&
-                view?.model_variant === "soft-gripper-camera" ? (
-                  <p>Resting pose reference</p>
+                {showReference ? (
+                  <p>
+                    {softGripper
+                      ? "Resting pose reference"
+                      : "Model zero reference"}
+                  </p>
                 ) : null}
                 {stage !== "reference" && view?.joints.length ? (
                   <div className="joint-readings">
@@ -655,7 +742,9 @@ function App() {
                                 : "Move this joint"}
                             </td>
                             {(stage === "sweep" && !view?.sweep_only) ||
-                            stage === "review" ? (
+                            (stage === "review" &&
+                              (recalibratingJoint === null ||
+                                recalibratingJoint === index)) ? (
                               <td>
                                 <button
                                   type="button"
@@ -690,6 +779,8 @@ function App() {
                                     </button>
                                   ))}
                               </td>
+                            ) : stage === "review" ? (
+                              <td />
                             ) : null}
                           </tr>
                         ))}
