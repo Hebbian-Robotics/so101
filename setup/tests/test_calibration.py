@@ -44,6 +44,9 @@ class MemoryServoBus(RegisterBus):
             "i_coefficient": [0] * 6,
             "d_coefficient": [32] * 6,
             "return_delay_time": [250] * 6,
+            "maximum_acceleration": [50] * 6,
+            "max_torque_limit": [1000] * 6,
+            "protection_current": [310] * 6,
             "lock": [0] * 6,
         }
         self.writes: list[tuple[int, str, int]] = []
@@ -118,6 +121,10 @@ def test_draft_is_read_only_and_save_creates_a_standalone_configuration(
     assert (session.state.backup / "registers.json").is_file()
     assert bus.registers["p_coefficient"] == [16, 32, 32, 16, 16, 16]
     assert bus.registers["return_delay_time"] == [0] * 6
+    assert bus.registers["maximum_acceleration"] == [254] * 6
+    assert bus.registers["max_torque_limit"] == [1000] * 5 + [500]
+    assert bus.registers["protection_current"] == [310] * 5 + [250]
+    assert not (session.directory / "servo-overrides.toml").exists()
     assert bus.registers["torque_enable"] == [0] * 6
     assert not any(register in {"torque_enable", "goal_position"} for _, register, _ in bus.writes)
     assert bus.closed
@@ -212,6 +219,7 @@ def test_matching_saved_calibration_skips_manual_steps_and_preserves_tuned_endpo
     assert "servos" not in document
     document["servos"] = {"expected_position_gains_by_motor": {"2": [24, 0, 32]}}
     (session.directory / "setup.toml").write_text(tomli_w.dumps(document))
+    (session.directory / "servo-overrides.toml").write_text("maximum_acceleration = 100\n")
     setup = NativeSetupStore().load(session.directory, "ARM_A")
     writes_before_reconnect = list(bus.writes)
     reconnected = CalibrationSession(setup, session.directory, session.calibration_root, bus)
@@ -223,6 +231,7 @@ def test_matching_saved_calibration_skips_manual_steps_and_preserves_tuned_endpo
     assert saved_setup.gripper.open_position_radians == 1.0
     assert saved_setup.servos.expected_position_gains_by_motor[2] == [32, 0, 32]
     assert bus.registers["p_coefficient"][1] == 32
+    assert bus.registers["maximum_acceleration"] == [100] * 6
     assert "servos" not in tomllib.loads((session.directory / "setup.toml").read_text())
 
 

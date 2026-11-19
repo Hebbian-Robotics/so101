@@ -85,3 +85,13 @@ See [coordinate conventions](src/so101_setup/COORDINATES.md),
 [official LeRobot guide](https://huggingface.co/docs/lerobot/so101).
 Use an external control application for powered operation. This workflow still
 requires validation on the particular physical arm.
+
+A full calibration save sets maximum acceleration to 254 on all six motors,
+gripper maximum torque to 500, and gripper protection current to 250. These are
+raw register values. A single-joint recalibration leaves them alone.
+
+For an arm that needs different values, manually add `servo-overrides.toml`
+beside its `setup.toml`. Set only the keys it needs:
+`maximum_acceleration`, `gripper_max_torque_limit`, or
+`gripper_protection_current`. The tool applies them on the next full save.
+New arm setups do not create this file.

@@ -54,6 +54,12 @@ class GripperEndpoints(SetupSection):
         return self
 
 
+class ServoRegisterSettings(SetupSection):
+    maximum_acceleration: Annotated[int, Field(ge=0, le=254)] = 254
+    gripper_max_torque_limit: Annotated[int, Field(ge=0, le=1000)] = 500
+    gripper_protection_current: Annotated[int, Field(ge=0, le=310)] = 250
+
+
 class ServoSettings(SetupSection):
     # Starting configuration, not an empirically qualified tune for every arm.
     expected_position_gains: PositionGains = Field(default_factory=lambda: [16, 0, 32])
@@ -68,6 +74,7 @@ class ArmSetup(SetupSection):
     alignment: ModelAlignment = Field(default_factory=ModelAlignment)
     gripper: GripperEndpoints = Field(default_factory=GripperEndpoints)
     servos: ServoSettings = Field(default_factory=ServoSettings)
+    servo_registers: ServoRegisterSettings = Field(default_factory=ServoRegisterSettings)
 
     def motor_ids_in_joint_order(self) -> list[int]:
         return list(MOTOR_IDS) if self.motor_id_order == "ascending" else MOTOR_IDS[::-1]

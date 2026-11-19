@@ -42,6 +42,9 @@ CALIBRATION_REGISTERS = (
     "i_coefficient",
     "d_coefficient",
     "return_delay_time",
+    "maximum_acceleration",
+    "max_torque_limit",
+    "protection_current",
     "lock",
 )
 
@@ -656,6 +659,17 @@ class CalibrationSession:
             updates["operating_mode"] = [self.bus.definition.operating_modes["position"]] * 6
             if self.setup.servos.expected_return_delay_time is not None:
                 updates["return_delay_time"] = [self.setup.servos.expected_return_delay_time] * 6
+            servo_registers = self.setup.servo_registers
+            updates["maximum_acceleration"] = [servo_registers.maximum_acceleration] * 6
+            # The bus is in joint order, including when the physical IDs are reversed.
+            updates["max_torque_limit"] = [
+                *registers["max_torque_limit"][:5],
+                servo_registers.gripper_max_torque_limit,
+            ]
+            updates["protection_current"] = [
+                *registers["protection_current"][:5],
+                servo_registers.gripper_protection_current,
+            ]
         calibration_bytes = CALIBRATION_ADAPTER.dump_json(entries, indent=2)
         configuration_path = self.store.configuration_path(self.directory)
         result = ArmSetup.model_validate(

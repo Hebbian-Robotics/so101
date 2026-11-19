@@ -6,7 +6,7 @@ from typing import Protocol
 
 import tomli_w
 
-from .configuration import ArmSetup, ModelVariant, ServoSettings
+from .configuration import ArmSetup, ModelVariant, ServoRegisterSettings, ServoSettings
 
 
 class SetupStore(Protocol):
@@ -32,27 +32,34 @@ class NativeSetupStore:
                     "This directory contains a host profile. Use its setup adapter or select a new standalone setup directory."
                 )
             setup = ArmSetup(serial=serial, model_variant=self.default_model_variant)
-            return self.with_servo_defaults(setup)
+            return self.with_servo_defaults(directory, setup)
         document = tomllib.loads(path.read_text())
         setup = ArmSetup.model_validate(document)
         if setup.serial != serial:
             raise ValueError(f"Setup serial {setup.serial} does not match USB controller {serial}")
-        return self.with_servo_defaults(setup)
+        return self.with_servo_defaults(directory, setup)
 
     @staticmethod
-    def with_servo_defaults(setup: ArmSetup) -> ArmSetup:
+    def with_servo_defaults(directory: Path, setup: ArmSetup) -> ArmSetup:
         shoulder_id, elbow_id = (2, 3) if setup.motor_id_order == "ascending" else (5, 4)
+        override_path = directory / "servo-overrides.toml"
+        register_settings = (
+            ServoRegisterSettings.model_validate(tomllib.loads(override_path.read_text()))
+            if override_path.exists()
+            else ServoRegisterSettings()
+        )
         return setup.model_copy(
             update={
+                "servo_registers": register_settings,
                 "servos": ServoSettings(
                     expected_position_gains_by_motor={
                         shoulder_id: [32, 0, 32],
                         elbow_id: [32, 0, 32],
                     }
-                )
+                ),
             }
         )
 
     def encode(self, directory: Path, setup: ArmSetup) -> bytes:
-        document = setup.model_dump(mode="json", exclude={"servos"})
+        document = setup.model_dump(mode="json", exclude={"servos", "servo_registers"})
         return tomli_w.dumps(document).encode()
