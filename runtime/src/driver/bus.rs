@@ -12,7 +12,7 @@ use rustypot::servo::{Encoding, RegisterInfo};
 
 use crate::telemetry::Reconnection;
 
-pub(super) const BAUD_RATE: u32 = 1_000_000;
+pub(crate) const BAUD_RATE: u32 = 1_000_000;
 /// Longer than a USB serial adapter's 16 ms latency timer, as `LeRobot` uses.
 /// A whole state reply is about 1 ms on the wire at 1 Mbaud (six motors, 16
 /// bytes each at 10 us a byte), so only the adapter's latency timer keeps this
@@ -171,6 +171,16 @@ type RustypotResult<T> = Result<T, Box<dyn std::error::Error>>;
 pub(super) const RECONNECT_INTERVAL: Duration = Duration::from_secs(1);
 
 /// An open serial port owned by rustypot's bus.
+pub(crate) fn open_serial(
+    path: &str,
+    timeout: Duration,
+) -> anyhow::Result<Box<dyn serialport::SerialPort>> {
+    serialport::new(path, BAUD_RATE)
+        .timeout(timeout)
+        .open()
+        .with_context(|| format!("Cannot open the Feetech bus {path}"))
+}
+
 struct Port {
     bus: Bus,
 }
@@ -179,14 +189,14 @@ impl Port {
     /// Open the port by its configured path. Startup and every reconnection open
     /// it here, so a reconnected bus is set up exactly as at startup.
     fn open(path: &str, motor_ids: &[u8]) -> anyhow::Result<Self> {
-        let serial = serialport::new(path, BAUD_RATE)
-            .timeout(TIMEOUT)
-            .open()
-            .with_context(|| format!("Cannot open the Feetech bus {path}"))?;
+        Ok(Self::from_serial(open_serial(path, TIMEOUT)?, motor_ids))
+    }
+
+    fn from_serial(serial: Box<dyn serialport::SerialPort>, motor_ids: &[u8]) -> Self {
         let motors: BTreeMap<u8, _> = motor_ids.iter().map(|id| (*id, DEFINITION)).collect();
-        Ok(Self {
+        Self {
             bus: Bus::new(serial, motors),
-        })
+        }
     }
 
     /// Open the port and hear every motor answer: what a lost bus must do to
@@ -231,13 +241,35 @@ impl SerialBus {
     /// # Errors
     /// The port cannot be opened.
     pub fn open(path: &str, motor_ids: &[u8]) -> anyhow::Result<Self> {
-        Ok(Self {
+        Ok(Self::with_port(
+            path,
+            motor_ids,
+            Port::open(path, motor_ids)?,
+        ))
+    }
+
+    pub(crate) fn open_with_raw(
+        path: &str,
+        motor_ids: &[u8],
+    ) -> anyhow::Result<(Self, Box<dyn serialport::SerialPort>)> {
+        let serial = open_serial(path, TIMEOUT)?;
+        let raw = serial
+            .try_clone()
+            .context("Cannot share the open Feetech port for parameter restore")?;
+        Ok((
+            Self::with_port(path, motor_ids, Port::from_serial(serial, motor_ids)),
+            raw,
+        ))
+    }
+
+    fn with_port(path: &str, motor_ids: &[u8], port: Port) -> Self {
+        Self {
             path: path.to_owned(),
             motor_ids: motor_ids.to_vec(),
-            port: Some(Port::open(path, motor_ids)?),
+            port: Some(port),
             attempt: None,
             timing: BusTiming::new(),
-        })
+        }
     }
 
     #[must_use]
@@ -249,6 +281,18 @@ impl SerialBus {
         self.port
             .as_mut()
             .with_context(|| format!("The Feetech bus {} is disconnected", self.path))
+    }
+
+    pub(crate) fn write_acknowledged(
+        &mut self,
+        id: u8,
+        register: &str,
+        value: i64,
+    ) -> anyhow::Result<()> {
+        self.port()?
+            .bus
+            .write_register(id, register, value)
+            .map_err(|error| anyhow!("Motor {id}, writing {register}: {error}"))
     }
 
     /// Run one request with retries, timing each answered attempt and counting

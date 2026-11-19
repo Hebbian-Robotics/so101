@@ -73,7 +73,8 @@ telemetry/alarms, environment confirmation, commands and encoder conversion
 against an in-memory servo bus. They do not establish physical accuracy or tune
 an arm.
 
-The browser calibration application is the sibling `setup` Python/web package.
+The sibling [setup CLI](../setup/README.md) uses this crate for commissioning.
+The browser and terminal share the same calibration session and hardware operations.
 No station or policy runtime is required. Host applications adapt hardware
 telemetry/errors to their own controller interfaces and keep application safety
 policy outside this crate. See the repository README for upstream references.

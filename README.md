@@ -7,36 +7,32 @@ tool on its own. No RUA installation is required.
 ## Included
 
 - Rust hardware driver: servo I/O, joint feedback, preflight, torque control and recovery.
-- Python calibration tool with a browser UI and read-only 3D model.
+- Rust setup CLI with terminal commands, a bundled browser UI, and a read-only 3D model.
 - TypeScript model-rendering helpers for React/Three.js viewers.
 
 ## Calibrate an arm
 
-Install [uv](https://docs.astral.sh/uv/getting-started/installation/) and use
-Python 3.12 or newer. Install the released tool and start it:
+Download the `so101` archive for your platform from
+[GitHub Releases](https://github.com/Hebbian-Robotics/so101/releases), extract it,
+and put the executable on your PATH. The executable contains the browser UI
+and robot models.
 
 ```sh
-uv tool install https://github.com/Hebbian-Robotics/so101/releases/download/v0.1.5/hebbian_so101_setup-0.1.5-py3-none-any.whl
-so101-calibrate
+so101 setup
 ```
 
-The wheel is hosted on [GitHub Releases](https://github.com/Hebbian-Robotics/so101/releases),
-not PyPI. It includes the browser UI and robot models; you don't need Node,
-a Rust toolchain or a source checkout.
-
-Open the local URL printed in the terminal. With the arm supported and torque
-off, connect its USB controller, match the reference pose, record safe joint
-travel and gripper endpoints, then review and save. The tool never powers or
+The command opens a local browser page. With the arm supported and torque off,
+connect its USB controller, match the reference pose, record safe joint travel
+and gripper endpoints, then review and save. The setup tool never powers or
 moves the arm.
 
-Choose a different setup directory when needed:
+Use `so101 setup --no-browser` to run the same workflow via terminal commands.
+See the [setup instructions](setup/README.md) for the headless workflow, motor ID
+programming, servo reset, and source builds.
 
-```sh
-so101-calibrate --setup-directory ./my-arm-setups
-```
-
-For the source version and model selection for a new arm, see the
-[setup instructions](setup/README.md).
+For a directly installed executable, run `so101 update` to install the latest
+GitHub release for your platform. Use `so101 update --check` to see whether an update is
+available. If you installed using a package manager, update it there.
 
 Each controller gets its own `arms/<serial>/setup.toml` and LeRobot-compatible
 `calibration.json`. See the [setup guide](setup/README.md) for saved files,
@@ -55,7 +51,7 @@ motor health. Enabling torque and sending joint/gripper goals are explicit
 operations. Start with the [Rust usage example and configuration contract](runtime/README.md#use).
 
 The driver handles hardware operations. Your application owns motion limits,
-workspace checks, timing and process supervision. The Python calibration tool
+workspace checks, timing and process supervision. The setup CLI
 is optional when using the driver.
 
 ## Use the model helpers
@@ -93,5 +89,5 @@ See [contributing](CONTRIBUTING.md) to build from source and run checks.
 ## License
 
 Software is [MIT](LICENSE). Robot URDF/mesh assets retain their Apache-2.0 license;
-third-party browser notices accompany built wheels. See [NOTICE](NOTICE) for
+third-party browser notices accompany the setup executable. See [NOTICE](NOTICE) for
 provenance.

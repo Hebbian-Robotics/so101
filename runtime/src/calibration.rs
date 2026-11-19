@@ -11,7 +11,7 @@ use std::collections::BTreeMap;
 use std::path::{Component, Path, PathBuf};
 
 use anyhow::{Context, ensure};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 use super::settings::FeetechSettings;
 
@@ -21,7 +21,7 @@ pub(crate) const HOMING_STEPS: f64 = 2047.0;
 pub const STS3215_RESOLUTION: i64 = 4096;
 
 /// One motor's entry in a `LeRobot` calibration file.
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct LerobotMotorCalibration {
     pub id: u8,

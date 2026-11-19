@@ -23,6 +23,7 @@ mod servos;
 mod tests;
 mod units;
 
+pub(crate) use bus::{BAUD_RATE, open_serial};
 pub use bus::{BusTiming, SerialBus, ServoBus, StateBlock};
 pub use servos::Servos;
 pub use units::{radians_to_steps, steps_to_radians};

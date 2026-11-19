@@ -3,13 +3,19 @@
 use std::collections::BTreeMap;
 
 use anyhow::ensure;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
-#[serde(try_from = "i64")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(try_from = "i64", into = "i32")]
 pub enum Sign {
     Negative,
     Positive,
+}
+
+impl From<Sign> for i32 {
+    fn from(sign: Sign) -> Self {
+        sign.as_integer()
+    }
 }
 
 impl TryFrom<i64> for Sign {

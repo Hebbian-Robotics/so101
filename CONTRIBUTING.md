@@ -2,22 +2,25 @@
 
 ## Development
 
-Install Rust 1.92 or newer, Python 3.12 or newer, Node 24 and pnpm 12.
-Linux builds use mold (`sudo apt-get install mold`); macOS and Windows use their
-default linker. Then run `pnpm install` and `uv sync --project setup`.
-Run `cargo test --manifest-path runtime/Cargo.toml` and
-`uv run --project setup pytest` after relevant changes. Build the UI with
-`pnpm build` before `uv build --project setup`; run the installed-wheel check
-with `uv run --project setup python setup/tools/check-wheel.py dist`.
+Install Rust 1.92 or newer, Node 24 and pnpm 12. Linux builds use mold
+(`sudo apt-get install mold`). Run `pnpm install --frozen-lockfile` and
+`pnpm build` before compiling the setup CLI so Cargo can embed the built UI.
 
-## Release the Python setup package
+```sh
+cargo test --manifest-path runtime/Cargo.toml --locked --all-features
+cargo test --manifest-path setup/native/Cargo.toml --locked --all-features
+cargo run --manifest-path setup/native/Cargo.toml -- setup
+```
 
-Update `setup/pyproject.toml` and `setup/uv.lock`, then push a matching version
-tag, for example `git tag v0.1.1` and `git push origin v0.1.1`. The release
-workflow builds and verifies the wheel and source archive before attaching
-them to a GitHub Release. This does not publish to PyPI. A manual workflow run
-on a branch validates and retains build artifacts without publishing a release.
-Reruns preserve existing release assets, since applications pin their checksums.
+The prior Python implementation remains available for hardware comparison.
+Its checks use Python 3.12 or newer and `uv sync --project setup`.
+
+## Release the setup CLI
+
+Update the version in `setup/native/Cargo.toml` and its lockfile, then push a
+matching version tag. The release workflow builds archives for Linux, macOS and
+Windows with the bundled UI. A manual workflow run retains archives without
+publishing. Reruns preserve existing release assets.
 
 ## Code Quality
 
@@ -41,7 +44,9 @@ cargo install cargo-deny --version 0.20.2 --locked
 cargo machete --with-metadata --skip-target-dir runtime
 cargo deny --manifest-path runtime/Cargo.toml --config runtime/deny.toml --all-features --exclude-dev --locked check bans
 cargo clippy --manifest-path runtime/Cargo.toml --all-targets --all-features -- -D warnings
-cargo fmt --manifest-path runtime/Cargo.toml # Formatting
+cargo fmt --manifest-path runtime/Cargo.toml
+cargo clippy --manifest-path setup/native/Cargo.toml --all-targets --all-features -- -D warnings
+cargo fmt --manifest-path setup/native/Cargo.toml
 ```
 
 ### Python

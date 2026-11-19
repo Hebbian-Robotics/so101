@@ -4,11 +4,13 @@ use crate::SO101_JOINT_NAMES;
 use crate::calibration::{calibration_by_motor_id, parse_named_calibration};
 use crate::settings::Sign;
 use anyhow::{Context, ensure};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::path::Path;
 
-#[derive(Default, Deserialize)]
+pub(crate) const INCOMPLETE_CALIBRATION_FILE: &str = ".calibration-pending";
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize, Serialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum ModelVariant {
     #[default]
@@ -16,7 +18,7 @@ pub enum ModelVariant {
     SoftGripperCamera,
 }
 
-#[derive(Clone, Copy, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct MotorIds {
     shoulder_pan: u8,
@@ -55,11 +57,36 @@ impl MotorIds {
         )
     }
 
-    fn validate(self) -> anyhow::Result<()> {
+    pub fn from_joint_order(ids: [u8; 6]) -> anyhow::Result<Self> {
+        let [
+            shoulder_pan,
+            shoulder_lift,
+            elbow_flex,
+            wrist_flex,
+            wrist_roll,
+            gripper,
+        ] = ids;
+        let mapping = Self {
+            shoulder_pan,
+            shoulder_lift,
+            elbow_flex,
+            wrist_flex,
+            wrist_roll,
+            gripper,
+        };
+        mapping.validate()?;
+        Ok(mapping)
+    }
+
+    #[must_use]
+    pub fn ordered(self) -> [u8; 6] {
         let (joints, gripper) = self.motor_ids_in_joint_order();
-        let mut ids = [
-            joints[0], joints[1], joints[2], joints[3], joints[4], gripper,
-        ];
+        let [pan, lift, elbow, flex, roll] = joints;
+        [pan, lift, elbow, flex, roll, gripper]
+    }
+
+    pub fn validate(self) -> anyhow::Result<()> {
+        let mut ids = self.ordered();
         ids.sort_unstable();
         ensure!(
             ids == [1, 2, 3, 4, 5, 6],
@@ -69,7 +96,7 @@ impl MotorIds {
     }
 }
 
-#[derive(Deserialize)]
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct ArmSetup {
     pub serial: String,
@@ -85,7 +112,7 @@ pub struct ArmSetup {
     pub servos: ServoSettings,
 }
 
-#[derive(Deserialize)]
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct Alignment {
     pub joint_signs: [Sign; 5],
@@ -105,7 +132,7 @@ impl Default for Alignment {
     }
 }
 
-#[derive(Deserialize)]
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct GripperEndpoints {
     pub closed_position_radians: f64,
@@ -121,7 +148,7 @@ impl Default for GripperEndpoints {
     }
 }
 
-#[derive(Deserialize)]
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct ServoSettings {
     #[serde(rename = "expected_position_gains")]
@@ -145,39 +172,48 @@ impl Default for ServoSettings {
 impl ArmSetup {
     /// Read and validate a setup for the selected USB controller.
     pub fn load(path: &Path, serial: &str) -> anyhow::Result<Self> {
+        let pending = path.with_file_name(INCOMPLETE_CALIBRATION_FILE);
+        ensure!(
+            !pending.try_exists()?,
+            "SO-101 calibration save did not finish. Inspect the backups named in {} and recalibrate.",
+            pending.display()
+        );
         let setup: Self = toml::from_str(&std::fs::read_to_string(path)?)
             .with_context(|| format!("Invalid SO-101 setup {}", path.display()))?;
+        setup.validate(serial)?;
+        Ok(setup)
+    }
+
+    pub(crate) fn validate(&self, serial: &str) -> anyhow::Result<()> {
         ensure!(
-            setup.serial == serial,
+            self.serial == serial,
             "Setup serial does not match USB controller"
         );
         ensure!(
-            setup
-                .alignment
+            self.alignment
                 .joint_offsets_radians
                 .iter()
-                .chain([&setup.alignment.gripper_offset_radians])
+                .chain([&self.alignment.gripper_offset_radians])
                 .all(|value| value.is_finite()),
             "Setup offsets must be finite"
         );
         ensure!(
-            setup.gripper.closed_position_radians.is_finite()
-                && setup.gripper.open_position_radians.is_finite()
-                && (setup.gripper.closed_position_radians - setup.gripper.open_position_radians)
+            self.gripper.closed_position_radians.is_finite()
+                && self.gripper.open_position_radians.is_finite()
+                && (self.gripper.closed_position_radians - self.gripper.open_position_radians)
                     .abs()
                     > 0.0,
             "Invalid gripper endpoints"
         );
         ensure!(
-            setup
-                .servos
+            self.servos
                 .position_gains_by_motor
                 .keys()
                 .all(|id| id.parse::<u8>().is_ok_and(|id| (1..=6).contains(&id))),
             "Gain overrides must name an SO-101 motor (IDs 1-6)"
         );
-        setup.motor_ids.validate()?;
-        Ok(setup)
+        self.motor_ids.validate()?;
+        Ok(())
     }
 }
 
@@ -187,6 +223,13 @@ impl MotorIds {
     /// # Errors
     /// The file cannot be read or the named entries do not match this order.
     pub fn validate_calibration_mapping(self, path: &Path) -> anyhow::Result<()> {
+        self.load_named_calibration(path).map(|_| ())
+    }
+
+    pub fn load_named_calibration(
+        self,
+        path: &Path,
+    ) -> anyhow::Result<BTreeMap<String, crate::calibration::LerobotMotorCalibration>> {
         let entries = parse_named_calibration(path, &std::fs::read(path)?)?;
         let joint_names = SO101_JOINT_NAMES.into_iter().chain(["gripper"]);
         let (joint_ids, gripper_id) = self.motor_ids_in_joint_order();
@@ -199,7 +242,7 @@ impl MotorIds {
             "Calibration {} does not match the setup's motor ID mapping; recalibrate the arm",
             path.display()
         );
-        calibration_by_motor_id(entries.into_values(), motor_ids, path)?;
-        Ok(())
+        calibration_by_motor_id(entries.values().cloned(), motor_ids, path)?;
+        Ok(entries)
     }
 }

@@ -1,16 +1,20 @@
 # Calibration and setup
 
-From a source checkout, install Node 24, pnpm 12, Python 3.12 or newer and uv,
-then build the browser assets and start the tool:
+Run `so101 setup` to open the bundled browser UI. Use the sidebar to choose
+**Calibrate arm** or **Program motor IDs**. From a source checkout, build the
+browser assets and run the Rust CLI:
 
 ```sh
 pnpm install --frozen-lockfile
 pnpm build
-uv run --project setup so101-calibrate
+cargo run --manifest-path setup/native/Cargo.toml -- setup
 ```
 
-Open the local URL it prints. Use the sidebar to choose **Calibrate arm** or
-**Program motor IDs**.
+To update an executable installed directly from GitHub Releases, close the
+running setup session and run `so101 update`. The command selects the archive
+for your platform, verifies its SHA-256 digest from GitHub, and replaces the
+executable in place. Run `so101 update --check` to check without installing.
+Use your package manager for a package-managed install.
 
 To prepare loose STS3215 servos for a follower, open **Program motor IDs**.
 Choose **New follower batch** to program IDs 1–6 in order, skipping motors you
@@ -51,9 +55,8 @@ releases the port. If save fails, reconcile the recorded backup before control.
 The tool never enables torque or sends position goals.
 
 `ArmSetup` holds serial identity, motor ID order, model alignment, gripper
-endpoints and expected servo settings. `NativeSetupStore` writes `arms/<serial>/setup.toml` and
-LeRobot-compatible `calibration.json`. Applications can implement `SetupStore`
-for their own format; config retrieval and Git operations remain with callers.
+endpoints, and expected servo settings. Setup writes `arms/<serial>/setup.toml`
+and LeRobot-compatible `calibration.json`.
 The default store is `$SO101_SETUP_DIRECTORY`, otherwise
 `$XDG_CONFIG_HOME/so101-setup` (defaulting to `~/.config/so101-setup`).
 
@@ -66,7 +69,7 @@ table and leaves the programmed servo IDs intact.
 
 New arms default to the soft gripper with wrist camera and start calibration in
 the resting pose. For stock gripper geometry, start with
-`so101-calibrate --model-variant stock`.
+`so101 setup --model-variant stock`.
 Existing arms keep the `model_variant` in their `setup.toml`; to change an
 existing arm's model, edit that field before starting the tool. The viewer selects the corresponding model and saving calibration
 preserves the selection. This selects geometry; it does not recalibrate an
@@ -88,13 +91,13 @@ beside its `setup.toml`. Set only the keys it needs:
 `gripper_protection_current`. The tool applies them on the next full save.
 New arm setups do not create this file.
 
-### Restore one servo's parameters
+## Reset servo parameters
 
 Stop the motion station and close the calibration tool. With the arm supported,
 all six servos powered and torque off, run:
 
 ```sh
-uv run --project setup so101-restore-servo --serial BOARD_SERIAL --motor-id 4 --confirm-restore
+so101 servo reset --serial BOARD_SERIAL --motor-id 4 --confirm
 ```
 
 This sends a parameter restore to the specified ID on the daisy chain. It
@@ -104,3 +107,53 @@ IDs are unique. Before and after snapshots go under the arm's `backups/`
 directory. The restore changes the target servo's stored parameters, including
 calibration. Restore its calibration and verify it with torque off before
 enabling the arm.
+
+Use `--all` in place of `--motor-id` to reset all six. This is the same reset
+offered before a full calibration. A partial full reset must be retried before
+calibration can proceed.
+
+## Calibrate from the terminal
+
+Run a setup service in one terminal so it can keep sampling during the sweep:
+
+```sh
+so101 setup --no-browser
+```
+
+In a second terminal, select the controller, choose whether to reset, and
+capture the reference and sweep:
+
+```sh
+so101 list
+so101 calibrate begin --serial BOARD_SERIAL --skip-reset
+so101 calibrate sweep start
+# Move each joint by hand through its safe range.
+so101 calibrate sweep finish
+so101 calibrate review --watch
+```
+
+If the arm opens to an existing calibration review, run `so101 calibrate restart`
+and choose whether to reset before starting a new full sweep.
+
+Use `so101 calibrate map 6,5,4,3,2,1` during the full sweep to change the
+physical motor-to-joint mapping. Use `so101 calibrate check-order` before and
+after moving only the base, then `so101 calibrate apply-order` to apply the
+detected order. During review, `so101 calibrate reverse shoulder-pan` changes
+direction, and `so101 calibrate adjust shoulder-pan -0.02` changes its offset in
+radians. Check the reported angles and direction against the physical arm.
+`so101 calibrate save` displays the draft and asks for confirmation. For scripts,
+pass `--confirm --revision <revision>` with the revision from `so101 calibrate
+review --json`.
+
+To recalibrate one joint, connect to a saved setup that matches the arm, then
+run `so101 calibrate sweep start --joint shoulder-pan`. Finish, review, and
+save the same way. Use `so101 calibrate restart` to discard the draft, or
+`so101 calibrate disconnect` to release the controller.
+
+To program a loose motor's physical ID, stop calibration or disconnect the arm,
+then connect and power just the loose servo. List adapters and program the ID:
+
+```sh
+so101 list --adapters
+so101 servo id --port USB_PORT --motor-id 4 --isolated
+```

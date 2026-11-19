@@ -3,6 +3,7 @@
 #![doc = include_str!("../README.md")]
 
 pub mod calibration;
+pub mod commissioning;
 pub mod config;
 pub mod discovery;
 pub mod driver;

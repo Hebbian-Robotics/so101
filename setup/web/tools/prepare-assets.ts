@@ -1,5 +1,11 @@
 import { execFileSync } from "node:child_process";
-import { existsSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
+import {
+  cpSync,
+  existsSync,
+  readdirSync,
+  readFileSync,
+  writeFileSync,
+} from "node:fs";
 import { resolve } from "node:path";
 import { z } from "zod";
 
@@ -9,24 +15,27 @@ const licenseRecord = z.object({
   paths: z.array(z.string()),
   license: z.string(),
 });
+const licenseArguments = [
+  "--filter",
+  "@hebbian/so101-calibrator-ui",
+  "licenses",
+  "list",
+  "--prod",
+  "--json",
+];
+const licenseList =
+  process.platform === "win32"
+    ? execFileSync(
+        "cmd.exe",
+        ["/d", "/s", "/c", `pnpm ${licenseArguments.join(" ")}`],
+        {
+          encoding: "utf8",
+        },
+      )
+    : execFileSync("pnpm", licenseArguments, { encoding: "utf8" });
 const records = z
   .record(z.string(), z.array(licenseRecord))
-  .parse(
-    JSON.parse(
-      execFileSync(
-        "pnpm",
-        [
-          "--filter",
-          "@hebbian/so101-calibrator-ui",
-          "licenses",
-          "list",
-          "--prod",
-          "--json",
-        ],
-        { encoding: "utf8" },
-      ),
-    ),
-  );
+  .parse(JSON.parse(licenseList));
 const notices = [
   "Runtime dependency licenses for the SO-101 setup browser. Robot model licensing is in robot/so101/LICENSE.txt.",
   "\nshadcn/ui registry components (MIT)\n",
@@ -81,10 +90,14 @@ for (const record of Object.values(records).flat()) {
       `No license text found for runtime dependency ${record.name}`,
     );
 }
+const robotAssets = resolve(
+  import.meta.dirname,
+  "../../src/so101_setup/assets",
+);
+cpSync(resolve(robotAssets, "robot"), resolve(robotAssets, "web/robot"), {
+  recursive: true,
+});
 writeFileSync(
-  resolve(
-    import.meta.dirname,
-    "../../src/so101_setup/assets/web/THIRD_PARTY_NOTICES.txt",
-  ),
+  resolve(robotAssets, "web/THIRD_PARTY_NOTICES.txt"),
   notices.join("\n"),
 );
