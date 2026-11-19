@@ -32,7 +32,7 @@ from .calibration import (
     Reference,
     Saved,
 )
-from .configuration import ModelVariant, MotorIdOrder
+from .configuration import DEFAULT_NEW_ARM_MODEL, ModelVariant, MotorIdOrder
 from .device import RegisterBus, RegisterReadError
 from .discovery import ControllerChoice, discover_controllers
 from .motor_ids import FOLLOWER_MOTORS, program_motor_id, programming_ports
@@ -114,7 +114,7 @@ class ApplicationView(BaseModel):
     stage: Literal["disconnected", "reference", "sweep", "review", "saved", "error"]
     controllers: list[ControllerChoice] = Field(default_factory=list)
     serial: str = ""
-    model_variant: ModelVariant = "stock"
+    model_variant: ModelVariant = DEFAULT_NEW_ARM_MODEL
     joints: list[JointView] = Field(default_factory=list)
     gripper_closed_recorded: bool = False
     gripper_open_recorded: bool = False
@@ -740,8 +740,8 @@ def command_line() -> None:
     parser.add_argument(
         "--model-variant",
         choices=("stock", "soft-gripper-camera"),
-        default="stock",
-        help="Model for new arm entries; existing setup files keep their model.",
+        default=DEFAULT_NEW_ARM_MODEL,
+        help="Model for new arms (default: soft-gripper-camera). Saved arms keep their model.",
     )
     parser.add_argument("--serial", help="USB serial of the arm whose motor ID order is being set")
     parser.add_argument(

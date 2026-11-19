@@ -17,6 +17,7 @@ SO101_JOINT_NAMES = [
 ]
 MOTOR_IDS = [1, 2, 3, 4, 5, 6]
 ModelVariant = Literal["stock", "soft-gripper-camera"]
+DEFAULT_NEW_ARM_MODEL: ModelVariant = "soft-gripper-camera"
 MotorIdOrder = Literal["ascending", "descending"]
 
 

@@ -6,7 +6,13 @@ from typing import Protocol
 
 import tomli_w
 
-from .configuration import ArmSetup, ModelVariant, ServoRegisterSettings, ServoSettings
+from .configuration import (
+    DEFAULT_NEW_ARM_MODEL,
+    ArmSetup,
+    ModelVariant,
+    ServoRegisterSettings,
+    ServoSettings,
+)
 
 
 class SetupStore(Protocol):
@@ -18,7 +24,7 @@ class SetupStore(Protocol):
 class NativeSetupStore:
     """One setup.toml and LeRobot calibration.json per controller directory."""
 
-    def __init__(self, default_model_variant: ModelVariant = "stock") -> None:
+    def __init__(self, default_model_variant: ModelVariant = DEFAULT_NEW_ARM_MODEL) -> None:
         self.default_model_variant = default_model_variant
 
     def configuration_path(self, directory: Path) -> Path:

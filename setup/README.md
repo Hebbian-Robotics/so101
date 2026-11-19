@@ -73,8 +73,9 @@ by hand with torque off. Confirm that each moves its matching joint in the
 preview before saving. Save records `motor_id_order` in `setup.toml` and leaves
 the programmed servo IDs intact.
 
-The default model is `"stock"`. For a new arm with the optional TPU gripper and
-wrist camera assembly, start with `so101-calibrate --model-variant soft-gripper-camera`.
+New arms default to the soft gripper with wrist camera and start calibration in
+the resting pose. For a stock gripper and midpoint reference pose, start with
+`so101-calibrate --model-variant stock`.
 Existing arms keep the `model_variant` in their `setup.toml`; to change an
 existing arm's model, edit that field before starting the tool. The viewer selects the corresponding model and saving calibration
 preserves the selection. This selects geometry; it does not recalibrate an

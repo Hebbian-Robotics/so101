@@ -8,7 +8,8 @@ from so101_setup.storage import NativeSetupStore
 
 
 def test_new_arm_model_selection_preserves_existing_setup(tmp_path: Path) -> None:
-    store = NativeSetupStore("soft-gripper-camera")
+    store = NativeSetupStore()
+    assert NativeSetupStore("stock").load(tmp_path, "ARM_A").model_variant == "stock"
     setup = store.load(tmp_path, "ARM_A")
     assert setup.model_variant == "soft-gripper-camera"
     (tmp_path / "setup.toml").write_bytes(NativeSetupStore().encode(tmp_path, setup))
