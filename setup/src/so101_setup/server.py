@@ -16,7 +16,7 @@ from pathlib import Path
 from socket import socket
 from socketserver import BaseServer
 from typing import Annotated, Literal
-from urllib.parse import unquote, urlsplit
+from urllib.parse import parse_qs, unquote, urlsplit
 
 from pydantic import BaseModel, ConfigDict, Field, TypeAdapter
 
@@ -579,18 +579,12 @@ class CalibrationRequestHandler(BaseHTTPRequestHandler):
         status: HTTPStatus,
         content: bytes,
         content_type: str = "application/json",
-        *,
-        set_session: bool = False,
     ) -> None:
         self.send_response(status)
         self.send_header("Content-Type", content_type)
         self.send_header("Content-Length", str(len(content)))
         self.send_header("Cache-Control", "no-store")
         self.send_header("X-Content-Type-Options", "nosniff")
-        if set_session:
-            self.send_header(
-                "Set-Cookie", f"so101_session={self.token}; HttpOnly; SameSite=Strict; Path=/"
-            )
         self.send_header(
             "Content-Security-Policy",
             "default-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; frame-ancestors 'none'",
@@ -613,11 +607,31 @@ class CalibrationRequestHandler(BaseHTTPRequestHandler):
         session = cookies.get("so101_session")
         return session is not None and secrets.compare_digest(session.value, self.token)
 
+    def presents_launch_token(self, query: str) -> bool:
+        return any(
+            secrets.compare_digest(candidate.encode(), self.token.encode())
+            for candidate in parse_qs(query).get("token", [])
+        )
+
     def do_GET(self) -> None:
         if not self.local_host():
             self.reply(HTTPStatus.FORBIDDEN, b"{}")
             return
-        path = urlsplit(self.path).path
+        request = urlsplit(self.path)
+        path = request.path
+        # Every local account can reach the loopback listener, so the session cookie is
+        # issued only to a browser holding the launch token printed to the operator.
+        if path in {"/", "/motor-ids"} and self.presents_launch_token(request.query):
+            self.send_response(HTTPStatus.SEE_OTHER)
+            self.send_header("Location", path)
+            self.send_header("Content-Length", "0")
+            self.send_header("Cache-Control", "no-store")
+            self.send_header("Referrer-Policy", "no-referrer")
+            self.send_header(
+                "Set-Cookie", f"so101_session={self.token}; HttpOnly; SameSite=Strict; Path=/"
+            )
+            self.end_headers()
+            return
         if path == "/api/events":
             if not self.authenticated():
                 self.reply(HTTPStatus.UNAUTHORIZED, b"{}")
@@ -642,7 +656,7 @@ class CalibrationRequestHandler(BaseHTTPRequestHandler):
             if not self.authenticated():
                 self.reply(
                     HTTPStatus.UNAUTHORIZED,
-                    b'{"message":"Reload the calibration page to start a session."}',
+                    b'{"message":"Open the calibration link printed by the server to start a session."}',
                 )
                 return
             try:
@@ -663,7 +677,6 @@ class CalibrationRequestHandler(BaseHTTPRequestHandler):
             HTTPStatus.OK,
             requested.read_bytes(),
             mimetypes.guess_type(requested.name)[0] or "application/octet-stream",
-            set_session=path in {"/", "/motor-ids"},
         )
 
     def stream_events(self) -> None:
@@ -766,7 +779,7 @@ def serve_application(
         ) as server,
     ):
         print(
-            f"SO-101 calibration: http://127.0.0.1:{server.server_port}/",
+            f"SO-101 calibration: http://127.0.0.1:{server.server_port}/?token={token}",
             flush=True,
         )
         with contextlib.suppress(KeyboardInterrupt):

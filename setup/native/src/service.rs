@@ -25,6 +25,7 @@ use crate::app::{Action, Application, ProgramMotor, follower_motors, programming
 include!(concat!(env!("OUT_DIR"), "/assets.rs"));
 
 const COOKIE: &str = "so101_session";
+const LAUNCH_PARAMETER: &str = "token";
 const LOCAL_CSP: &str = "default-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; frame-ancestors 'none'";
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -36,6 +37,10 @@ pub struct ServiceAddress {
 impl ServiceAddress {
     pub fn url(&self) -> String {
         format!("http://127.0.0.1:{}", self.port)
+    }
+
+    fn launch_url(&self) -> String {
+        format!("{}/?{LAUNCH_PARAMETER}={}", self.url(), self.token)
     }
 }
 
@@ -94,10 +99,30 @@ impl ServiceDirectory {
         }
     }
 
+    fn launch_page(&self) -> PathBuf {
+        self.0.join("setup.html")
+    }
+
     fn publish(&self, address: &ServiceAddress) -> Result<PublishedEndpoint> {
+        self.publish_private(self.endpoint(), &serde_json::to_vec(address)?)
+    }
+
+    // Browsers are opened on this page instead of the launch URL because process arguments
+    // are readable by every local account.
+    fn publish_launch_page(&self, address: &ServiceAddress) -> Result<PublishedEndpoint> {
+        let launch_url = address.launch_url();
+        let page = format!(
+            "<!doctype html><meta charset=\"utf-8\"><meta name=\"referrer\" content=\"no-referrer\">\
+             <meta http-equiv=\"refresh\" content=\"0;url={launch_url}\">\
+             <title>SO-101 setup</title><a href=\"{launch_url}\">Open SO-101 setup</a>"
+        );
+        self.publish_private(self.launch_page(), page.as_bytes())
+    }
+
+    // NamedTempFile creates owner-only files, so other accounts cannot read the token.
+    fn publish_private(&self, path: PathBuf, contents: &[u8]) -> Result<PublishedEndpoint> {
         let mut file = tempfile::NamedTempFile::new_in(&self.0)?;
-        file.write_all(&serde_json::to_vec(address)?)?;
-        let path = self.endpoint();
+        file.write_all(contents)?;
         file.persist(&path)?;
         Ok(PublishedEndpoint(path))
     }
@@ -171,9 +196,10 @@ pub async fn serve(
             local_requests,
         ))
         .with_state(state);
+    let launch_page = directory.publish_launch_page(&address)?;
     let _endpoint = directory.publish(&address)?;
-    println!("SO-101 setup: {}/", address.url());
-    if !no_browser && let Err(error) = open::that_detached(address.url()) {
+    println!("SO-101 setup: {}", address.launch_url());
+    if !no_browser && let Err(error) = open::that_detached(&launch_page.0) {
         eprintln!("Could not open the browser: {error}");
     }
     let outcome = tokio::select! {
@@ -231,13 +257,17 @@ async fn local_requests(State(state): State<HttpState>, request: Request, next: 
     {
         return (
             StatusCode::UNAUTHORIZED,
-            Json(json!({ "message": "Open the setup page or rerun the CLI command." })),
+            Json(json!({ "message": "Open the setup link printed by so101 setup." })),
         )
             .into_response();
     }
     let mut response = next.run(request).await;
     let headers = response.headers_mut();
     headers.insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
+    headers.insert(
+        header::REFERRER_POLICY,
+        HeaderValue::from_static("no-referrer"),
+    );
     headers.insert(
         header::X_CONTENT_TYPE_OPTIONS,
         HeaderValue::from_static("nosniff"),
@@ -249,12 +279,21 @@ async fn local_requests(State(state): State<HttpState>, request: Request, next: 
     response
 }
 
+fn token_matches(candidate: &str, token: &str) -> bool {
+    candidate.len() == token.len()
+        && candidate
+            .bytes()
+            .zip(token.bytes())
+            .fold(0, |difference, (left, right)| difference | (left ^ right))
+            == 0
+}
+
 fn authorized(headers: &HeaderMap, method: &Method, address: &ServiceAddress) -> bool {
-    let bearer = format!("Bearer {}", address.token);
     if headers
         .get(header::AUTHORIZATION)
         .and_then(|value| value.to_str().ok())
-        == Some(&bearer)
+        .and_then(|value| value.strip_prefix("Bearer "))
+        .is_some_and(|candidate| token_matches(candidate, &address.token))
     {
         return true;
     }
@@ -266,17 +305,53 @@ fn authorized(headers: &HeaderMap, method: &Method, address: &ServiceAddress) ->
     {
         return false;
     }
-    let cookie = format!("{COOKIE}={}", address.token);
     headers
         .get(header::COOKIE)
         .and_then(|value| value.to_str().ok())
-        .is_some_and(|value| value.split(';').any(|part| part.trim() == cookie))
+        .is_some_and(|value| {
+            value.split(';').any(|part| {
+                part.trim()
+                    .strip_prefix(COOKIE)
+                    .and_then(|rest| rest.strip_prefix('='))
+                    .is_some_and(|candidate| token_matches(candidate, &address.token))
+            })
+        })
+}
+
+fn presents_launch_token(request: &Request, address: &ServiceAddress) -> bool {
+    request.uri().query().is_some_and(|query| {
+        query.split('&').any(|pair| {
+            pair.strip_prefix(LAUNCH_PARAMETER)
+                .and_then(|rest| rest.strip_prefix('='))
+                .is_some_and(|candidate| token_matches(candidate, &address.token))
+        })
+    })
 }
 
 async fn asset(State(state): State<HttpState>, request: Request) -> Response {
-    let path = request.uri().path().trim_start_matches('/');
-    let index = matches!(path, "" | "motor-ids");
-    let name = if index { "index.html" } else { path };
+    let path = request.uri().path();
+    let index = matches!(path, "/" | "/motor-ids");
+    // Every local account can reach the loopback listener, so the session cookie is issued
+    // only to a browser holding the launch token from the operator's private files.
+    if index && presents_launch_token(&request, &state.address) {
+        let session = format!(
+            "{COOKIE}={}; HttpOnly; SameSite=Strict; Path=/",
+            state.address.token
+        );
+        return match (HeaderValue::from_str(&session), HeaderValue::from_str(path)) {
+            (Ok(session), Ok(location)) => (
+                StatusCode::SEE_OTHER,
+                [(header::SET_COOKIE, session), (header::LOCATION, location)],
+            )
+                .into_response(),
+            _ => StatusCode::INTERNAL_SERVER_ERROR.into_response(),
+        };
+    }
+    let name = if index {
+        "index.html"
+    } else {
+        path.trim_start_matches('/')
+    };
     let Some((_, bytes)) = ASSETS.iter().find(|(key, _)| *key == name) else {
         return StatusCode::NOT_FOUND.into_response();
     };
@@ -285,14 +360,6 @@ async fn asset(State(state): State<HttpState>, request: Request) -> Response {
         HeaderValue::from_str(mime_guess::from_path(name).first_or_octet_stream().as_ref())
     {
         response.headers_mut().insert(header::CONTENT_TYPE, mime);
-    }
-    if index
-        && let Ok(value) = HeaderValue::from_str(&format!(
-            "{COOKIE}={}; HttpOnly; SameSite=Strict; Path=/",
-            state.address.token
-        ))
-    {
-        response.headers_mut().insert(header::SET_COOKIE, value);
     }
     response
 }
@@ -457,6 +524,50 @@ pub fn resolve_directory(path: Option<&Path>) -> Result<PathBuf> {
 mod tests {
     use super::*;
 
+    fn open_browser_session(browser: &ureq::Agent, address: &ServiceAddress) -> Result<String> {
+        let mut page = browser.get(format!("{}/", address.url())).call()?;
+        assert_eq!(page.status(), StatusCode::OK);
+        assert!(page.headers().get(header::SET_COOKIE).is_none());
+        let document = page.body_mut().read_to_string()?;
+        assert!(document.contains("<title>Hebbian Robotics SO-101</title>"));
+        let motor_ids_page = browser.get(format!("{}/motor-ids", address.url())).call()?;
+        assert_eq!(motor_ids_page.status(), StatusCode::OK);
+        assert!(motor_ids_page.headers().get(header::SET_COOKIE).is_none());
+        let guessed = browser
+            .get(format!("{}/?{LAUNCH_PARAMETER}=guess", address.url()))
+            .call()?;
+        assert!(guessed.headers().get(header::SET_COOKIE).is_none());
+
+        let rejected = browser.get(format!("{}/api/state", address.url())).call()?;
+        assert_eq!(rejected.status(), StatusCode::UNAUTHORIZED);
+        let rejected = browser
+            .post(format!("{}/api/action", address.url()))
+            .header(header::ORIGIN, address.url())
+            .send_json(&Action::Disconnect)?;
+        assert_eq!(rejected.status(), StatusCode::UNAUTHORIZED);
+
+        let launch = browser.get(address.launch_url()).call()?;
+        assert_eq!(launch.status(), StatusCode::SEE_OTHER);
+        assert_eq!(launch.headers()[header::REFERRER_POLICY], "no-referrer");
+        assert_eq!(
+            launch
+                .headers()
+                .get(header::LOCATION)
+                .map(HeaderValue::as_bytes),
+            Some(b"/".as_slice())
+        );
+        let cookie = launch
+            .headers()
+            .get(header::SET_COOKIE)
+            .context("No browser session")?
+            .to_str()?
+            .split(';')
+            .next()
+            .context("Invalid cookie")?
+            .to_owned();
+        Ok(cookie)
+    }
+
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn bundled_ui_and_cli_share_a_local_server() -> Result<()> {
         let scratch = tempfile::tempdir()?;
@@ -483,34 +594,29 @@ mod tests {
             })
             .await??;
             let client = Client::connect(&directory)?;
+            let launch_page = std::fs::read_to_string(directory.launch_page())?;
+            assert!(launch_page.contains(&address.launch_url()));
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                for private in [directory.endpoint(), directory.launch_page()] {
+                    let mode = std::fs::metadata(private)?.permissions().mode();
+                    assert_eq!(mode & 0o077, 0, "service files must be owner-only");
+                }
+            }
             tokio::task::spawn_blocking(move || {
                 let browser = ureq::Agent::config_builder()
                     .proxy(None)
                     .http_status_as_error(false)
+                    .max_redirects(0)
                     .timeout_global(Some(Duration::from_secs(5)))
                     .build()
                     .new_agent();
-                let mut page = browser.get(format!("{}/", address.url())).call()?;
-                assert_eq!(page.status(), StatusCode::OK);
-                let cookie_header = page
-                    .headers()
-                    .get(header::SET_COOKIE)
-                    .context("No browser session")?
-                    .to_str()?;
-                let cookie = cookie_header
-                    .split(';')
-                    .next()
-                    .context("Invalid cookie")?
-                    .to_owned();
-                let document = page.body_mut().read_to_string()?;
-                assert!(document.contains("<title>Hebbian Robotics SO-101</title>"));
                 let model = browser
                     .get(format!("{}/robot/so101/robot.urdf", address.url()))
                     .call()?;
                 assert_eq!(model.status(), StatusCode::OK);
-                let rejected = browser.get(format!("{}/api/state", address.url())).call()?;
-                assert_eq!(rejected.status(), StatusCode::UNAUTHORIZED);
-
+                let cookie = open_browser_session(&browser, &address)?;
                 let mut browser_state = browser
                     .get(format!("{}/api/state", address.url()))
                     .header(header::COOKIE, &cookie)
