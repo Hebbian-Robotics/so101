@@ -6,6 +6,7 @@ import json
 import mimetypes
 import os
 import secrets
+import sys
 import threading
 from collections.abc import Callable
 from functools import partial
@@ -13,10 +14,10 @@ from http import HTTPStatus
 from http.cookies import CookieError, SimpleCookie
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from socket import socket
+from socket import inet_aton, socket
 from socketserver import BaseServer
 from typing import Annotated, Literal
-from urllib.parse import unquote, urlsplit
+from urllib.parse import parse_qs, unquote, urlencode, urlsplit
 
 from pydantic import BaseModel, ConfigDict, Field, TypeAdapter
 
@@ -554,6 +555,32 @@ def calibration_root() -> Path:
     return hugging_face / "lerobot/calibration"
 
 
+def proc_net_tcp_address(address: tuple[str, int]) -> str:
+    host, port = address[0], address[1]
+    return f"{int.from_bytes(inet_aton(host), sys.byteorder):08X}:{port:04X}"
+
+
+def connection_from_operator(client: tuple[str, int], server: tuple[str, int]) -> bool:
+    """Whether the loopback client socket belongs to this account (or root) on Linux.
+
+    TCP has no peer-credential option, so the client end is found in the
+    kernel socket table. Closed sockets keep a table entry with inode 0 and
+    no meaningful owner, so only a socket still held by a process counts.
+    """
+    if sys.platform != "linux":
+        return True
+    wanted = (proc_net_tcp_address(client), proc_net_tcp_address(server))
+    try:
+        table = Path("/proc/net/tcp").read_text().splitlines()[1:]
+    except OSError:
+        return False
+    for line in table:
+        fields = line.split()
+        if len(fields) > 9 and (fields[1], fields[2]) == wanted:
+            return fields[9] != "0" and int(fields[7]) in {os.getuid(), 0}
+    return False
+
+
 class CalibrationRequestHandler(BaseHTTPRequestHandler):
     def __init__(
         self,
@@ -573,6 +600,9 @@ class CalibrationRequestHandler(BaseHTTPRequestHandler):
     def setup(self) -> None:
         super().setup()
         self.connection.settimeout(5)
+        self.from_operator = connection_from_operator(
+            self.client_address, self.connection.getsockname()
+        )
 
     def reply(
         self,
@@ -581,12 +611,15 @@ class CalibrationRequestHandler(BaseHTTPRequestHandler):
         content_type: str = "application/json",
         *,
         set_session: bool = False,
+        location: str | None = None,
     ) -> None:
         self.send_response(status)
         self.send_header("Content-Type", content_type)
         self.send_header("Content-Length", str(len(content)))
         self.send_header("Cache-Control", "no-store")
         self.send_header("X-Content-Type-Options", "nosniff")
+        if location is not None:
+            self.send_header("Location", location)
         if set_session:
             self.send_header(
                 "Set-Cookie", f"so101_session={self.token}; HttpOnly; SameSite=Strict; Path=/"
@@ -611,10 +644,20 @@ class CalibrationRequestHandler(BaseHTTPRequestHandler):
         except CookieError:
             return False
         session = cookies.get("so101_session")
-        return session is not None and secrets.compare_digest(session.value, self.token)
+        return session is not None and secrets.compare_digest(
+            session.value.encode(), self.token.encode()
+        )
+
+    def presents_launch_token(self) -> bool:
+        # Every local account can reach the loopback port; only the operator's
+        # terminal sees the launch URL that carries this token.
+        offered = parse_qs(urlsplit(self.path).query).get("token", [])
+        return len(offered) == 1 and secrets.compare_digest(
+            offered[0].encode(), self.token.encode()
+        )
 
     def do_GET(self) -> None:
-        if not self.local_host():
+        if not self.from_operator or not self.local_host():
             self.reply(HTTPStatus.FORBIDDEN, b"{}")
             return
         path = urlsplit(self.path).path
@@ -642,7 +685,7 @@ class CalibrationRequestHandler(BaseHTTPRequestHandler):
             if not self.authenticated():
                 self.reply(
                     HTTPStatus.UNAUTHORIZED,
-                    b'{"message":"Reload the calibration page to start a session."}',
+                    b'{"message":"Open the link printed by so101-calibrate to start a session."}',
                 )
                 return
             try:
@@ -655,6 +698,9 @@ class CalibrationRequestHandler(BaseHTTPRequestHandler):
             return
         requested = (self.asset_directory / unquote(path).lstrip("/")).resolve()
         if path in {"/", "/motor-ids"}:
+            if self.presents_launch_token():
+                self.reply(HTTPStatus.SEE_OTHER, b"", "text/plain", set_session=True, location=path)
+                return
             requested = self.asset_directory / "index.html"
         if not requested.is_relative_to(self.asset_directory) or not requested.is_file():
             self.reply(HTTPStatus.NOT_FOUND, b"Not found", "text/plain")
@@ -663,7 +709,6 @@ class CalibrationRequestHandler(BaseHTTPRequestHandler):
             HTTPStatus.OK,
             requested.read_bytes(),
             mimetypes.guess_type(requested.name)[0] or "application/octet-stream",
-            set_session=path in {"/", "/motor-ids"},
         )
 
     def stream_events(self) -> None:
@@ -698,7 +743,8 @@ class CalibrationRequestHandler(BaseHTTPRequestHandler):
 
     def do_POST(self) -> None:
         if (
-            not self.local_host()
+            not self.from_operator
+            or not self.local_host()
             or self.headers.get("Origin") != f"http://{self.headers.get('Host', '')}"
         ):
             self.reply(HTTPStatus.FORBIDDEN, b"{}")
@@ -741,6 +787,10 @@ def request_handler(
     )
 
 
+def launch_url(port: int, token: str) -> str:
+    return f"http://127.0.0.1:{port}/?{urlencode({'token': token})}"
+
+
 class CalibrationHTTPServer(ThreadingHTTPServer):
     # Let an in-flight save finish before releasing the port and motion lock
     # during ordinary shutdown. The request socket timeout bounds idle clients.
@@ -765,10 +815,7 @@ def serve_application(
             ("127.0.0.1", port), request_handler(application, assets.resolve(), token)
         ) as server,
     ):
-        print(
-            f"SO-101 calibration: http://127.0.0.1:{server.server_port}/",
-            flush=True,
-        )
+        print(f"SO-101 calibration: {launch_url(server.server_port, token)}", flush=True)
         with contextlib.suppress(KeyboardInterrupt):
             try:
                 server.serve_forever()

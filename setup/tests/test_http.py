@@ -37,9 +37,16 @@ def test_api_requires_session_authorization_and_static_requests_stay_inside_asse
                 response = connection.getresponse()
                 assert response.status == expected
                 assert b"Private config" not in response.read()
-            connection.request("GET", "/")
+            for page in ("/", "/motor-ids", "/?token=wrong-token"):
+                connection.request("GET", page)
+                response = connection.getresponse()
+                assert response.status == 200
+                assert response.getheader("Set-Cookie") is None
+                response.read()
+            connection.request("GET", "/motor-ids?token=session-token")
             response = connection.getresponse()
-            assert response.status == 200
+            assert response.status == 303
+            assert response.getheader("Location") == "/motor-ids"
             cookie_header = response.getheader("Set-Cookie")
             assert cookie_header is not None
             session_cookie = cookie_header.split(";", 1)[0]
