@@ -455,6 +455,8 @@ pub fn resolve_directory(path: Option<&Path>) -> Result<PathBuf> {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::BTreeMap;
+
     use super::*;
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -537,5 +539,331 @@ mod tests {
         server.abort();
         let _ = server.await;
         result
+    }
+
+    // Another local account can open the published loopback port. The setup page must not
+    // turn that visitor into a session that can reset servos, program motor IDs, or change
+    // calibration. The operator's launch token still has to work.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn loopback_page_visitor_cannot_drive_setup_actions() -> Result<()> {
+        let scratch = tempfile::tempdir()?;
+        let setup_root = scratch.path().join("setup");
+        let calibration_root = scratch.path().join("lerobot");
+        let directory = ServiceDirectory(scratch.path().to_owned());
+        let app = Application::new(
+            setup_root.clone(),
+            calibration_root.clone(),
+            hebbian_so101::setup::ModelVariant::SoftGripperCamera,
+            false,
+        )?;
+        let server_directory = ServiceDirectory(directory.0.clone());
+        let server = tokio::spawn(async move {
+            let _lock = server_directory.lock()?;
+            serve(app, &server_directory, 0, true).await
+        });
+        let result = async {
+            let address = tokio::time::timeout(Duration::from_secs(5), async {
+                loop {
+                    if let Some(address) = directory.address()? {
+                        return Ok::<_, anyhow::Error>(address);
+                    }
+                    tokio::time::sleep(Duration::from_millis(10)).await;
+                }
+            })
+            .await??;
+            let port = address.port;
+            let operator = Client::new(address);
+            tokio::task::spawn_blocking(move || {
+                reject_port_only_visitor(&operator, port, &setup_root, &calibration_root)?;
+                operator.act(&Action::Disconnect)?;
+                Ok::<_, anyhow::Error>(())
+            })
+            .await?
+        }
+        .await;
+        server.abort();
+        let _ = server.await;
+        result
+    }
+
+    fn reject_port_only_visitor(
+        operator: &Client,
+        port: u16,
+        setup_root: &Path,
+        calibration_root: &Path,
+    ) -> Result<()> {
+        let before_view = operator.get("/api/state")?;
+        let before_setup = directory_entries(setup_root)?;
+        let before_calibration = directory_entries(calibration_root)?;
+        let agent = ureq::Agent::config_builder()
+            .proxy(None)
+            .http_status_as_error(false)
+            .timeout_global(Some(Duration::from_secs(5)))
+            .build()
+            .new_agent();
+        let mut cookies = Vec::new();
+        for path in ["/", "/motor-ids"] {
+            let (status, cookie, body) = fetch_page(&agent, port, path)?;
+            if status == StatusCode::FORBIDDEN && body.contains("Use the local setup URL") {
+                anyhow::bail!("visitor Host header did not select the setup listener");
+            }
+            if let Some(cookie) = cookie {
+                cookies.push(cookie);
+            }
+        }
+
+        let mut failures = Vec::new();
+        for cookie in std::iter::once(None).chain(cookies.iter().map(Some)) {
+            let presentation = if cookie.is_some() {
+                "setup-page cookie"
+            } else {
+                "no cookie"
+            };
+            for probe in privileged_probes() {
+                let (status, body) = send_probe(&agent, port, &probe, cookie)?;
+                if status == StatusCode::UNAUTHORIZED || status == StatusCode::FORBIDDEN {
+                    continue;
+                }
+                failures.push(format!(
+                    "{} {} with {presentation} -> {status} {}",
+                    probe.method,
+                    probe.path,
+                    response_message(&body)
+                ));
+            }
+        }
+
+        if directory_entries(setup_root)? != before_setup
+            || directory_entries(calibration_root)? != before_calibration
+        {
+            failures.push(
+                "setup or calibration files changed after the unauthenticated requests".to_owned(),
+            );
+        }
+        if operator.get("/api/state")? != before_view {
+            failures.push("the setup view changed after the unauthenticated requests".to_owned());
+        }
+        anyhow::ensure!(
+            failures.is_empty(),
+            "a client that only knows the setup port reached privileged operations:\n{}",
+            failures.join("\n")
+        );
+        Ok(())
+    }
+
+    struct Probe {
+        method: &'static str,
+        path: &'static str,
+        body: Option<Value>,
+    }
+
+    fn privileged_probes() -> Vec<Probe> {
+        let action = |value: Value| Probe {
+            method: "POST",
+            path: "/api/action",
+            body: Some(value),
+        };
+        vec![
+            Probe {
+                method: "GET",
+                path: "/api/state",
+                body: None,
+            },
+            Probe {
+                method: "GET",
+                path: "/api/events",
+                body: None,
+            },
+            Probe {
+                method: "GET",
+                path: "/api/controllers",
+                body: None,
+            },
+            Probe {
+                method: "GET",
+                path: "/api/motor-ids",
+                body: None,
+            },
+            Probe {
+                method: "POST",
+                path: "/api/motor-ids",
+                body: Some(json!({
+                    "port": "/dev/invalid-so101-port",
+                    "motor_id": 1,
+                    "isolated_motor": true
+                })),
+            },
+            Probe {
+                method: "POST",
+                path: "/api/reset",
+                body: Some(json!({
+                    "serial": "ABC",
+                    "motor_id": 1,
+                    "confirmed": true
+                })),
+            },
+            Probe {
+                method: "POST",
+                path: "/api/reset",
+                body: Some(json!({
+                    "serial": "ABC",
+                    "motor_id": null,
+                    "confirmed": true
+                })),
+            },
+            action(json!({"action": "connect", "serial": "ABC"})),
+            action(json!({"action": "begin", "serial": "ABC", "skip_reset": true})),
+            action(json!({"action": "disconnect"})),
+            action(json!({"action": "reset_servos"})),
+            action(json!({"action": "skip_servo_reset"})),
+            action(json!({"action": "restart"})),
+            action(json!({"action": "reopen"})),
+            action(json!({"action": "start_sweep", "joint_index": null})),
+            action(json!({"action": "finish_sweep"})),
+            action(json!({
+                "action": "map_motor_ids",
+                "motor_ids": {
+                    "shoulder_pan": 1,
+                    "shoulder_lift": 2,
+                    "elbow_flex": 3,
+                    "wrist_flex": 4,
+                    "wrist_roll": 5,
+                    "gripper": 6
+                }
+            })),
+            action(json!({"action": "check_motor_order"})),
+            action(json!({"action": "apply_detected_motor_order"})),
+            action(json!({"action": "reverse_joint", "index": 0})),
+            action(json!({"action": "adjust_joint", "index": 0, "delta_radians": 0.1})),
+            action(json!({"action": "save", "model_verified": true, "review_revision": 0})),
+        ]
+    }
+
+    fn fetch_page(
+        agent: &ureq::Agent,
+        port: u16,
+        path: &str,
+    ) -> Result<(StatusCode, Option<String>, String)> {
+        let mut response = agent
+            .get(format!("http://127.0.0.1:{port}{path}"))
+            .header(header::HOST, format!("127.0.0.1:{port}"))
+            .call()?;
+        let status = response.status();
+        let cookie = response
+            .headers()
+            .get(header::SET_COOKIE)
+            .and_then(|value| value.to_str().ok())
+            .and_then(|value| value.split(';').next())
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(ToOwned::to_owned);
+        let body = response.body_mut().read_to_string()?;
+        Ok((status, cookie, body))
+    }
+
+    fn send_probe(
+        agent: &ureq::Agent,
+        port: u16,
+        probe: &Probe,
+        cookie: Option<&String>,
+    ) -> Result<(StatusCode, String)> {
+        let url = format!("http://127.0.0.1:{port}{}", probe.path);
+        let host = format!("127.0.0.1:{port}");
+        let origin = format!("http://127.0.0.1:{port}");
+        let response = if probe.method == "GET" {
+            let request = agent
+                .get(&url)
+                .header(header::HOST, &host)
+                .header(header::ORIGIN, &origin);
+            let request = if let Some(cookie) = cookie {
+                request.header(header::COOKIE, cookie)
+            } else {
+                request
+            };
+            request.call()?
+        } else {
+            let request = agent
+                .post(&url)
+                .header(header::HOST, &host)
+                .header(header::ORIGIN, &origin);
+            let request = if let Some(cookie) = cookie {
+                request.header(header::COOKIE, cookie)
+            } else {
+                request
+            };
+            if let Some(body) = &probe.body {
+                request.send_json(body)?
+            } else {
+                request.send_empty()?
+            }
+        };
+        Ok(response_parts(response))
+    }
+
+    fn response_parts(mut response: ureq::http::Response<ureq::Body>) -> (StatusCode, String) {
+        let status = response.status();
+        let event_stream = response
+            .headers()
+            .get(header::CONTENT_TYPE)
+            .and_then(|value| value.to_str().ok())
+            .is_some_and(|value| value.contains("text/event-stream"));
+        if event_stream {
+            return (status, String::from("event stream"));
+        }
+        let body = response
+            .body_mut()
+            .read_to_string()
+            .unwrap_or_else(|error| error.to_string());
+        (status, body)
+    }
+
+    fn response_message(body: &str) -> String {
+        serde_json::from_str::<Value>(body)
+            .ok()
+            .and_then(|value| {
+                value
+                    .get("message")
+                    .and_then(Value::as_str)
+                    .map(ToOwned::to_owned)
+            })
+            .unwrap_or_else(|| format!("{}-byte body", body.len()))
+    }
+
+    fn directory_entries(root: &Path) -> Result<BTreeMap<PathBuf, DirectoryEntry>> {
+        let mut entries = BTreeMap::new();
+        if root.exists() {
+            collect_entries(root, root, &mut entries)?;
+        }
+        Ok(entries)
+    }
+
+    fn collect_entries(
+        root: &Path,
+        directory: &Path,
+        entries: &mut BTreeMap<PathBuf, DirectoryEntry>,
+    ) -> Result<()> {
+        let relative = directory
+            .strip_prefix(root)
+            .unwrap_or(directory)
+            .to_path_buf();
+        if relative.components().next().is_some() {
+            entries.insert(relative, DirectoryEntry::Directory);
+        }
+        for entry in std::fs::read_dir(directory)? {
+            let path = entry?.path();
+            if path.is_dir() {
+                collect_entries(root, &path, entries)?;
+            } else {
+                let relative = path.strip_prefix(root).unwrap_or(&path).to_path_buf();
+                entries.insert(relative, DirectoryEntry::File(std::fs::read(&path)?));
+            }
+        }
+        Ok(())
+    }
+
+    #[derive(PartialEq, Eq)]
+    enum DirectoryEntry {
+        Directory,
+        File(Vec<u8>),
     }
 }
