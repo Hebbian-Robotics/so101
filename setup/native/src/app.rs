@@ -340,12 +340,13 @@ impl Application {
                 self.retry_at = None;
             }
             Action::Reopen => {
-                let session = self.session.as_ref().context("Connect an arm first")?;
-                ensure!(
-                    matches!(session.stage(), Stage::Saved),
-                    "Reopen is available after saving"
-                );
-                self.session = Some(self.open_session(&session.setup.serial)?);
+                let session = self.session.as_mut().context("Connect an arm first")?;
+                if session.stage() == Stage::Saved {
+                    let serial = session.setup.serial.clone();
+                    self.session = Some(self.open_session(&serial)?);
+                } else {
+                    session.reopen_saved_review()?;
+                }
             }
             Action::ResetServos => {
                 let session = self.session.as_ref().context("Connect an arm first")?;

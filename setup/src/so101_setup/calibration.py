@@ -132,6 +132,7 @@ class DraftCalibration:
 @dataclass(frozen=True)
 class Reference:
     message: str = ""
+    can_reopen_saved_review: bool = False
 
 
 @dataclass
@@ -206,6 +207,7 @@ class CalibrationView(BaseModel):
     gripper_opening: float
     estimated: bool = False
     can_recalibrate_joint: bool = False
+    can_reopen_saved_review: bool = False
     recalibrating_joint: int | None = None
     message: str = ""
     command: str = ""
@@ -319,7 +321,17 @@ class CalibrationSession:
         if isinstance(self.state, (SweepRecording, Review)) and self.state.recalibration:
             self.state = self.review_calibration(self.reload_saved_baseline(), "saved")
         else:
-            self.state = Reference()
+            initial_state = self.initial_state()
+            self.state = Reference(
+                can_reopen_saved_review=isinstance(initial_state, Review)
+                and initial_state.source == "saved"
+            )
+
+    def reopen_saved_review(self) -> None:
+        if not isinstance(self.state, Reference) or not self.state.can_reopen_saved_review:
+            raise ValueError("Start from a saved setup before returning to its review")
+        self.require_torque_off()
+        self.state = self.review_calibration(self.reload_saved_baseline(), "saved")
 
     def reload_saved_baseline(self) -> Calibration:
         calibration = self.load_matching_calibration()
@@ -553,6 +565,8 @@ class CalibrationSession:
             gripper_opening=max(0.0, min(1.0, opening)),
             estimated=review is not None and review.estimated,
             can_recalibrate_joint=review is not None and review.source == "saved",
+            can_reopen_saved_review=isinstance(self.state, Reference)
+            and self.state.can_reopen_saved_review,
             recalibrating_joint=review.recalibration.index
             if review and review.recalibration
             else None,

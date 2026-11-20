@@ -120,6 +120,23 @@ impl SetupBus for MemoryBus {
     }
 }
 
+fn verify_return_to_saved_review(session: &mut Session<MemoryBus>, bus: &MemoryBus) -> Result<()> {
+    assert_eq!(session.stage(), Stage::Review);
+    session.restart()?;
+    assert_eq!(session.stage(), Stage::Reference);
+    assert!(session.view().can_reopen_saved_review);
+    let saved_limits = bus.registers()["min_position_limit"];
+    let mut changed_limits = saved_limits;
+    changed_limits[0] = (changed_limits[0] + 1).rem_euclid(4096);
+    bus.set("min_position_limit", changed_limits);
+    assert!(session.reopen_saved_review().is_err());
+    assert_eq!(session.stage(), Stage::Reference);
+    bus.set("min_position_limit", saved_limits);
+    session.reopen_saved_review()?;
+    assert_eq!(session.stage(), Stage::Review);
+    Ok(())
+}
+
 #[test]
 fn calibration_keeps_physical_sweeps_when_remapped_and_saves_runtime_files() -> Result<()> {
     let root = Files::new()?;
@@ -127,6 +144,7 @@ fn calibration_keeps_physical_sweeps_when_remapped_and_saves_runtime_files() -> 
     let bus = MemoryBus::new();
     let mut session = Session::connect(bus.clone(), files.clone())?;
     assert_eq!(session.stage(), Stage::Reference);
+    assert!(!session.view().can_reopen_saved_review);
     let initial = bus.registers();
     session.start_sweep(None)?;
     assert!(
@@ -182,6 +200,7 @@ fn calibration_keeps_physical_sweeps_when_remapped_and_saves_runtime_files() -> 
     assert_eq!(bus.registers()["p_coefficient"], [16, 16, 16, 32, 32, 16]);
 
     let mut reopened = Session::connect(bus.clone(), files.clone())?;
+    verify_return_to_saved_review(&mut reopened, &bus)?;
     assert!(reopened.view().can_recalibrate_joint);
     reopened.start_sweep(Some(0))?;
     let mut positions = bus.registers()["present_position"];

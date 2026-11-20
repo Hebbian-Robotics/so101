@@ -129,6 +129,7 @@ class ApplicationView(BaseModel):
     joints: list[JointView] = Field(default_factory=list)
     estimated: bool = False
     can_recalibrate_joint: bool = False
+    can_reopen_saved_review: bool = False
     offer_servo_reset: bool = False
     motor_ids: dict[str, int] = Field(default_factory=lambda: motor_id_mapping(MOTOR_IDS))
     checking_motor_order: bool = False
@@ -337,6 +338,7 @@ class CalibrationApplication:
                     raise
                 return ApplicationView(stage="error", serial=session.serial, message=str(error))
             view.servo_reset_incomplete = session.serial in self.incomplete_servo_resets
+            view.can_reopen_saved_review &= not view.servo_reset_incomplete
             view.offer_servo_reset = view.stage == "reference" and not self.servo_reset_decided
             view.motor_ids = session.setup.motor_ids
             view.checking_motor_order = self.motor_order_sample is not None
@@ -486,11 +488,14 @@ class CalibrationApplication:
             case MapMotorIdsAction(motor_ids=motor_ids):
                 self.apply_motor_mapping(session, motor_ids)
             case SimpleAction(action="reopen"):
-                if session.view().stage != "saved":
-                    raise ValueError("Reopen is available after saving")
-                serial = session.serial
-                self.session = None
-                self.connect(serial)
+                if isinstance(session.state, Saved):
+                    serial = session.serial
+                    self.session = None
+                    self.connect(serial)
+                else:
+                    if session.serial in self.incomplete_servo_resets:
+                        raise ValueError("An incomplete reset must be retried before calibration")
+                    session.reopen_saved_review()
             case SimpleAction(action="restart"):
                 session.restart()
                 self.servo_reset_decided = False

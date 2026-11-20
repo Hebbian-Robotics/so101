@@ -87,6 +87,7 @@ const viewSchema = z.object({
   joints: z.array(jointSchema),
   estimated: z.boolean().default(false),
   can_recalibrate_joint: z.boolean(),
+  can_reopen_saved_review: z.boolean().default(false),
   offer_servo_reset: z.boolean().default(false),
   motor_ids: z.record(z.string(), z.number().int().min(1).max(6)).optional(),
   checking_motor_order: z.boolean().default(false),
@@ -453,8 +454,11 @@ function App() {
                   .with({ stage: "reference", offerServoReset: true }, () => (
                     <section aria-labelledby="servo-reset-heading">
                       <h2 id="servo-reset-heading">
-                        Reset servos before calibration?
+                        Reset servos before full calibration?
                       </h2>
+                      {view?.message && !view.servo_reset_incomplete ? (
+                        <p role="status">{view.message}</p>
+                      ) : null}
                       <p>
                         Reset backs up and restores factory parameters on all
                         six servos. Motor IDs stay the same. The full sweep and
@@ -468,31 +472,38 @@ function App() {
                             calibrating.
                           </AlertDescription>
                         </Alert>
-                      ) : (
+                      ) : null}
+                      <div className="flex flex-wrap items-center gap-2">
                         <Button
                           variant="outline"
                           type="button"
                           disabled={disabled}
                           onClick={() =>
-                            void perform({ action: "skip_servo_reset" })
+                            void perform({ action: "reset_servos" })
                           }
                         >
-                          Skip reset
+                          {busy ? "Resetting servos…" : "Reset all six servos"}
                         </Button>
-                      )}
-                      <Button
-                        variant="outline"
-                        type="button"
-                        disabled={disabled}
-                        onClick={() => void perform({ action: "reset_servos" })}
-                      >
-                        {busy ? "Resetting servos…" : "Reset all six servos"}
-                      </Button>
+                        {view?.servo_reset_incomplete ? null : (
+                          <Button
+                            variant="link"
+                            size="sm"
+                            className="text-xs underline hover:decoration-2"
+                            type="button"
+                            disabled={disabled}
+                            onClick={() =>
+                              void perform({ action: "skip_servo_reset" })
+                            }
+                          >
+                            Skip reset
+                          </Button>
+                        )}
+                      </div>
                     </section>
                   ))
                   .with({ stage: "reference", offerServoReset: false }, () => (
                     <>
-                      <h2>Start calibration</h2>
+                      <h2>Start full calibration</h2>
                       {view?.message ? (
                         <p role="status">{view.message}</p>
                       ) : null}
@@ -693,6 +704,64 @@ function App() {
                   ))
                   .with({ stage: "review" }, () => (
                     <>
+                      {view?.can_recalibrate_joint ? (
+                        <form
+                          className="mb-5 border-b pb-5"
+                          aria-labelledby="recalibrate-joint-heading"
+                          action="api/action"
+                          method="post"
+                          onSubmit={(event) => {
+                            event.preventDefault();
+                            if (!jointToRecalibrate) return;
+                            void perform({
+                              action: "start_sweep",
+                              joint_index: Number(jointToRecalibrate),
+                            });
+                          }}
+                        >
+                          <h2 id="recalibrate-joint-heading">
+                            Recalibrate one joint
+                          </h2>
+                          <Field className="my-3">
+                            <FieldLabel htmlFor="calibration-joint-index">
+                              Joint to sweep
+                            </FieldLabel>
+                            <NativeSelect
+                              id="calibration-joint-index"
+                              aria-describedby="joint-reference-instructions"
+                              name="joint_index"
+                              required
+                              disabled={disabled}
+                              value={jointToRecalibrate}
+                              onChange={(event) => {
+                                setJointToRecalibrate(event.target.value);
+                                setVerifiedRevision(null);
+                              }}
+                            >
+                              <NativeSelectOption value="">
+                                Choose a joint
+                              </NativeSelectOption>
+                              {motorNames.map((name, index) => (
+                                <NativeSelectOption key={name} value={index}>
+                                  {labels[name]}
+                                </NativeSelectOption>
+                              ))}
+                            </NativeSelect>
+                            <FieldDescription id="joint-reference-instructions">
+                              Support and disable the arm. Match the selected
+                              joint to the reference pose before starting the
+                              sweep. For the gripper, start fully closed.
+                            </FieldDescription>
+                          </Field>
+                          <Button
+                            type="submit"
+                            disabled={disabled}
+                            aria-describedby="joint-reference-instructions"
+                          >
+                            Start joint sweep
+                          </Button>
+                        </form>
+                      ) : null}
                       <h2>
                         {recalibratingName
                           ? `Review ${recalibratingName}`
@@ -741,64 +810,6 @@ function App() {
                           ? "Save backs up the existing setup and verifies the selected joint’s calibration with torque off."
                           : "Save backs up existing files, verifies calibration and gain registers with torque off, and updates this arm’s setup files."}
                       </p>
-                      {view?.can_recalibrate_joint ? (
-                        <form
-                          aria-labelledby="recalibrate-joint-heading"
-                          action="api/action"
-                          method="post"
-                          onSubmit={(event) => {
-                            event.preventDefault();
-                            if (!jointToRecalibrate) return;
-                            void perform({
-                              action: "start_sweep",
-                              joint_index: Number(jointToRecalibrate),
-                            });
-                          }}
-                        >
-                          <h3 id="recalibrate-joint-heading">
-                            Recalibrate one joint
-                          </h3>
-                          <Field className="my-3">
-                            <FieldLabel htmlFor="calibration-joint-index">
-                              Joint to sweep
-                            </FieldLabel>
-                            <NativeSelect
-                              id="calibration-joint-index"
-                              aria-describedby="joint-reference-instructions"
-                              name="joint_index"
-                              required
-                              disabled={disabled}
-                              value={jointToRecalibrate}
-                              onChange={(event) => {
-                                setJointToRecalibrate(event.target.value);
-                                setVerifiedRevision(null);
-                              }}
-                            >
-                              <NativeSelectOption value="">
-                                Choose a joint
-                              </NativeSelectOption>
-                              {motorNames.map((name, index) => (
-                                <NativeSelectOption key={name} value={index}>
-                                  {labels[name]}
-                                </NativeSelectOption>
-                              ))}
-                            </NativeSelect>
-                            <FieldDescription id="joint-reference-instructions">
-                              Support and disable the arm. Match the selected
-                              joint to the reference pose before starting the
-                              sweep. For the gripper, start fully closed.
-                            </FieldDescription>
-                          </Field>
-                          <Button
-                            variant="outline"
-                            type="submit"
-                            disabled={disabled}
-                            aria-describedby="joint-reference-instructions"
-                          >
-                            Start joint sweep
-                          </Button>
-                        </form>
-                      ) : null}
                     </>
                   ))
                   .with({ stage: "saved" }, () => (
@@ -814,7 +825,7 @@ function App() {
                         disabled={disabled}
                         onClick={() => void perform({ action: "reopen" })}
                       >
-                        Adjust saved setup
+                        Review or recalibrate saved setup
                       </Button>
                       <p>Saved files:</p>
                       <pre>
@@ -840,6 +851,17 @@ function App() {
                   .exhaustive()}
                 {connected && stage !== "saved" && stage !== "error" ? (
                   <div className="secondary-actions">
+                    {stage === "reference" && view?.can_reopen_saved_review ? (
+                      <Button
+                        variant="link"
+                        className="underline hover:decoration-2"
+                        type="button"
+                        disabled={disabled}
+                        onClick={() => void perform({ action: "reopen" })}
+                      >
+                        Back to saved review
+                      </Button>
+                    ) : null}
                     {stage !== "reference" ? (
                       <Button
                         variant="outline"
@@ -851,7 +873,7 @@ function App() {
                       >
                         {recalibratingName
                           ? "Discard joint calibration"
-                          : "Start new calibration"}
+                          : "Start full calibration"}
                       </Button>
                     ) : null}
                     <Button

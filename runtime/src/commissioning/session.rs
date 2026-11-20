@@ -29,6 +29,7 @@ pub struct SessionView {
     pub gripper_opening: f64,
     pub estimated: bool,
     pub can_recalibrate_joint: bool,
+    pub can_reopen_saved_review: bool,
     pub recalibrating_joint: Option<usize>,
     pub message: String,
     pub configuration_path: String,
@@ -43,6 +44,7 @@ impl Default for SessionView {
             gripper_opening: 0.5,
             estimated: false,
             can_recalibrate_joint: false,
+            can_reopen_saved_review: false,
             recalibrating_joint: None,
             message: String::new(),
             configuration_path: String::new(),
@@ -75,6 +77,7 @@ impl ReviewSource {
 enum State {
     Reference {
         message: String,
+        can_reopen_saved_review: bool,
     },
     Sweep {
         recording: Sweep,
@@ -86,6 +89,15 @@ enum State {
     },
     Saved(SavedFiles),
     Failed(String),
+}
+
+impl State {
+    fn reference(message: impl Into<String>) -> Self {
+        Self::Reference {
+            message: message.into(),
+            can_reopen_saved_review: false,
+        }
+    }
 }
 
 #[derive(PartialEq, Eq)]
@@ -147,9 +159,7 @@ impl<Bus: SetupBus> Session<Bus> {
             setup,
             files,
             snapshot,
-            state: State::Reference {
-                message: String::new(),
-            },
+            state: State::reference(""),
             positions,
             previous_positions: positions,
             moving_until: [None; 6],
@@ -160,35 +170,31 @@ impl<Bus: SetupBus> Session<Bus> {
 
     fn initial_state(&self) -> Result<State> {
         if self.files.reset_incomplete()? {
-            return Ok(State::Reference {
-                message: "Retry the incomplete reset before calibrating.".into(),
-            });
+            return Ok(State::reference(
+                "Retry the incomplete reset before calibrating.",
+            ));
         }
         if self.files.calibration_incomplete()? {
-            return Ok(State::Reference {
-                message: "The previous save did not finish. Inspect the backups and capture a new calibration.".into(),
-            });
+            return Ok(State::reference(
+                "The previous save did not finish. Inspect the backups and capture a new calibration.",
+            ));
         }
         let path = self.files.calibration_path();
         if !path.try_exists()? {
-            return Ok(State::Reference {
-                message: String::new(),
-            });
+            return Ok(State::reference(""));
         }
         let calibration = match self.setup.motor_ids.load_named_calibration(&path) {
             Ok(calibration) => calibration,
             Err(error) => {
-                return Ok(State::Reference {
-                    message: format!("Saved calibration could not be reused: {error:#}"),
-                });
+                return Ok(State::reference(format!(
+                    "Saved calibration could not be reused: {error:#}"
+                )));
             }
         };
         if !self.snapshot.matches(&calibration) {
-            return Ok(State::Reference {
-                message:
-                    "Saved calibration differs from the motor registers. Capture a new reference."
-                        .into(),
-            });
+            return Ok(State::reference(
+                "Saved calibration differs from the motor registers. Capture a new reference.",
+            ));
         }
         let source = if self.files.matches_setup(&self.setup) {
             ReviewSource::Saved
@@ -212,6 +218,7 @@ impl<Bus: SetupBus> Session<Bus> {
     }
 
     fn reload_baseline(&mut self) -> Result<CalibrationEntries> {
+        self.files.require_completed_reset()?;
         let calibration = self
             .setup
             .motor_ids
@@ -265,9 +272,33 @@ impl<Bus: SetupBus> Session<Bus> {
             _ => {
                 self.state = State::Reference {
                     message: String::new(),
+                    can_reopen_saved_review: matches!(
+                        self.initial_state()?,
+                        State::Review {
+                            source: ReviewSource::Saved,
+                            ..
+                        }
+                    ),
                 }
             }
         }
+        Ok(())
+    }
+
+    pub fn reopen_saved_review(&mut self) -> Result<()> {
+        ensure!(
+            matches!(
+                self.state,
+                State::Reference {
+                    can_reopen_saved_review: true,
+                    ..
+                }
+            ),
+            "Start from a saved setup before returning to its review"
+        );
+        let baseline = self.reload_baseline()?;
+        self.sample()?;
+        self.state = self.review_saved(&baseline, ReviewSource::Saved)?;
         Ok(())
     }
 
@@ -490,8 +521,12 @@ impl<Bus: SetupBus> Session<Bus> {
                     })
                     .collect();
             }
-            State::Reference { message } => {
+            State::Reference {
+                message,
+                can_reopen_saved_review,
+            } => {
                 view.message.clone_from(message);
+                view.can_reopen_saved_review = *can_reopen_saved_review;
                 let (signs, offsets) = alignment_arrays(&self.setup.alignment);
                 view.joints = MOTOR_NAMES
                     .into_iter()
