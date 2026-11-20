@@ -1,13 +1,13 @@
 use std::convert::Infallible;
 use std::io::Write;
-use std::net::{Ipv4Addr, SocketAddrV4};
+use std::net::{Ipv4Addr, SocketAddr, SocketAddrV4};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use anyhow::{Context, Result, ensure};
 use axum::body::Body;
-use axum::extract::{DefaultBodyLimit, Request, State};
+use axum::extract::{ConnectInfo, DefaultBodyLimit, Request, State};
 use axum::http::{HeaderMap, HeaderValue, Method, StatusCode, header};
 use axum::middleware::{self, Next};
 use axum::response::sse::{Event, KeepAlive, Sse};
@@ -36,6 +36,10 @@ pub struct ServiceAddress {
 impl ServiceAddress {
     pub fn url(&self) -> String {
         format!("http://127.0.0.1:{}", self.port)
+    }
+
+    pub fn launch_url(&self) -> String {
+        format!("{}/?token={}", self.url(), self.token)
     }
 }
 
@@ -172,12 +176,15 @@ pub async fn serve(
         ))
         .with_state(state);
     let _endpoint = directory.publish(&address)?;
-    println!("SO-101 setup: {}/", address.url());
-    if !no_browser && let Err(error) = open::that_detached(address.url()) {
+    println!("SO-101 setup: {}", address.launch_url());
+    if !no_browser && let Err(error) = open::that_detached(address.launch_url()) {
         eprintln!("Could not open the browser: {error}");
     }
     let outcome = tokio::select! {
-        result = axum::serve(listener, router) => result,
+        result = axum::serve(
+            listener,
+            router.into_make_service_with_connect_info::<SocketAddr>(),
+        ) => result,
         result = tokio::signal::ctrl_c() => result,
     };
     sampling.abort();
@@ -213,6 +220,20 @@ async fn sample(app: Arc<Mutex<Application>>, sender: watch::Sender<Update>) {
 }
 
 async fn local_requests(State(state): State<HttpState>, request: Request, next: Next) -> Response {
+    let server = SocketAddr::from(SocketAddrV4::new(Ipv4Addr::LOCALHOST, state.address.port));
+    let from_operator = request
+        .extensions()
+        .get::<ConnectInfo<SocketAddr>>()
+        .is_some_and(|ConnectInfo(client)| connection_from_operator(*client, server));
+    if !from_operator {
+        return (
+            StatusCode::FORBIDDEN,
+            Json(
+                json!({ "message": "The setup service accepts only the account that started it." }),
+            ),
+        )
+            .into_response();
+    }
     let headers = request.headers();
     let hostname = format!("127.0.0.1:{}", state.address.port);
     if headers
@@ -249,6 +270,60 @@ async fn local_requests(State(state): State<HttpState>, request: Request, next: 
     response
 }
 
+/// Whether the loopback client socket belongs to this account (or root) on Linux.
+///
+/// TCP has no peer-credential option, so the client end is found in the
+/// kernel socket table. Closed sockets keep a table entry with inode 0 and no
+/// meaningful owner, so only a socket still held by a process counts.
+#[cfg(target_os = "linux")]
+fn connection_from_operator(client: SocketAddr, server: SocketAddr) -> bool {
+    let (SocketAddr::V4(client), SocketAddr::V4(server)) = (client, server) else {
+        return false;
+    };
+    let table_address = |address: SocketAddrV4| {
+        format!(
+            "{:08X}:{:04X}",
+            u32::from_ne_bytes(address.ip().octets()),
+            address.port()
+        )
+    };
+    let (Ok(status), Ok(table)) = (
+        std::fs::read_to_string("/proc/self/status"),
+        std::fs::read_to_string("/proc/net/tcp"),
+    ) else {
+        return false;
+    };
+    let Some(operator) = status
+        .lines()
+        .find_map(|line| line.strip_prefix("Uid:"))
+        .and_then(|uids| uids.split_whitespace().next())
+    else {
+        return false;
+    };
+    let (client, server) = (table_address(client), table_address(server));
+    table
+        .lines()
+        .skip(1)
+        .map(|line| line.split_whitespace().collect::<Vec<_>>())
+        .find(|fields| fields.len() > 9 && fields[1] == client && fields[2] == server)
+        .is_some_and(|fields| fields[9] != "0" && (fields[7] == operator || fields[7] == "0"))
+}
+
+#[cfg(not(target_os = "linux"))]
+fn connection_from_operator(_client: SocketAddr, _server: SocketAddr) -> bool {
+    true
+}
+
+fn presents_launch_token(request: &Request, address: &ServiceAddress) -> bool {
+    let mut offered = request
+        .uri()
+        .query()
+        .unwrap_or_default()
+        .split('&')
+        .filter_map(|pair| pair.strip_prefix("token="));
+    matches!((offered.next(), offered.next()), (Some(token), None) if token == address.token)
+}
+
 fn authorized(headers: &HeaderMap, method: &Method, address: &ServiceAddress) -> bool {
     let bearer = format!("Bearer {}", address.token);
     if headers
@@ -276,6 +351,22 @@ fn authorized(headers: &HeaderMap, method: &Method, address: &ServiceAddress) ->
 async fn asset(State(state): State<HttpState>, request: Request) -> Response {
     let path = request.uri().path().trim_start_matches('/');
     let index = matches!(path, "" | "motor-ids");
+    if index && presents_launch_token(&request, &state.address) {
+        let (Ok(location), Ok(cookie)) = (
+            HeaderValue::from_str(request.uri().path()),
+            HeaderValue::from_str(&format!(
+                "{COOKIE}={}; HttpOnly; SameSite=Strict; Path=/",
+                state.address.token
+            )),
+        ) else {
+            return StatusCode::BAD_REQUEST.into_response();
+        };
+        return (
+            StatusCode::SEE_OTHER,
+            [(header::LOCATION, location), (header::SET_COOKIE, cookie)],
+        )
+            .into_response();
+    }
     let name = if index { "index.html" } else { path };
     let Some((_, bytes)) = ASSETS.iter().find(|(key, _)| *key == name) else {
         return StatusCode::NOT_FOUND.into_response();
@@ -285,14 +376,6 @@ async fn asset(State(state): State<HttpState>, request: Request) -> Response {
         HeaderValue::from_str(mime_guess::from_path(name).first_or_octet_stream().as_ref())
     {
         response.headers_mut().insert(header::CONTENT_TYPE, mime);
-    }
-    if index
-        && let Ok(value) = HeaderValue::from_str(&format!(
-            "{COOKIE}={}; HttpOnly; SameSite=Strict; Path=/",
-            state.address.token
-        ))
-    {
-        response.headers_mut().insert(header::SET_COOKIE, value);
     }
     response
 }
@@ -487,12 +570,27 @@ mod tests {
                 let browser = ureq::Agent::config_builder()
                     .proxy(None)
                     .http_status_as_error(false)
+                    .max_redirects(0)
                     .timeout_global(Some(Duration::from_secs(5)))
                     .build()
                     .new_agent();
-                let mut page = browser.get(format!("{}/", address.url())).call()?;
-                assert_eq!(page.status(), StatusCode::OK);
-                let cookie_header = page
+                for page in ["/", "/motor-ids", "/?token=wrong-token"] {
+                    let mut page = browser.get(format!("{}{page}", address.url())).call()?;
+                    assert_eq!(page.status(), StatusCode::OK);
+                    assert!(page.headers().get(header::SET_COOKIE).is_none());
+                    let document = page.body_mut().read_to_string()?;
+                    assert!(document.contains("<title>Hebbian Robotics SO-101</title>"));
+                }
+                let launch = browser.get(address.launch_url()).call()?;
+                assert_eq!(launch.status(), StatusCode::SEE_OTHER);
+                assert_eq!(
+                    launch
+                        .headers()
+                        .get(header::LOCATION)
+                        .map(HeaderValue::as_bytes),
+                    Some(&b"/"[..])
+                );
+                let cookie_header = launch
                     .headers()
                     .get(header::SET_COOKIE)
                     .context("No browser session")?
@@ -502,8 +600,6 @@ mod tests {
                     .next()
                     .context("Invalid cookie")?
                     .to_owned();
-                let document = page.body_mut().read_to_string()?;
-                assert!(document.contains("<title>Hebbian Robotics SO-101</title>"));
                 let model = browser
                     .get(format!("{}/robot/so101/robot.urdf", address.url()))
                     .call()?;
