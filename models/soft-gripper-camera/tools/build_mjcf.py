@@ -5,10 +5,11 @@
 """Write a MuJoCo model of the soft gripper and camera assembly from its URDF.
 
 The URDF carries the geometry, frames and (estimated) inertials; this adds what a physics
-simulation also needs: the STS3215 servos' joint dynamics, a position actuator per joint and a
-site at the tool frame. Run build_model.py first.
+simulation also needs: the servos' response fitted to the real arms (servo_response.toml), a
+position actuator per joint and a site at the tool frame. Run build_model.py first.
 """
 
+import tomllib
 from pathlib import Path
 from xml.etree import ElementTree
 
@@ -27,15 +28,9 @@ JOINTS = (
     "wrist_roll",
     "gripper",
 )
-# STS3215 joint dynamics and position-servo model from MuJoCo Menagerie's SO-101
-# (google-deepmind/mujoco_menagerie f3b6013, robotstudio_so101/so101.xml, class "sts3215"),
-# fitted there for a servo proportional gain of 16. They describe the servo, not the links.
-SERVO_ARMATURE = 0.028
-SERVO_DAMPING = 0.60
-SERVO_FRICTION_LOSS = 0.052
-SERVO_POSITION_GAIN = 998.22
-SERVO_VELOCITY_GAIN = 2.731
-SERVO_FORCE_LIMIT = 2.94
+SERVO_RESPONSE = Path(__file__).resolve().parents[1] / "servo_response.toml"
+# MuJoCo has no command delay; simulators read it from the model under this name.
+COMMAND_DELAY_NUMERIC = "command_delay_seconds"
 TOOL_SITE = "gripper_frame"
 MAXIMUM_HULL_VERTICES = 128
 
@@ -62,19 +57,27 @@ def build_mjcf() -> None:
     spec.option.impratio = 10
     spec.option.iterations = 10
     spec.option.ls_iterations = 20
+    response = tomllib.loads(SERVO_RESPONSE.read_text())["response"]
+    unfitted = response["unfitted"]
     for name in JOINTS:
+        group = response["gain_groups"][response["gain_group_by_joint"][name]]
         joint = spec.joint(name)
-        joint.armature = SERVO_ARMATURE
+        joint.armature = unfitted["armature"]
         # CONSTRAINT: MuJoCo 3.10 takes damping as polynomial coefficients; only the linear one.
-        joint.damping = [SERVO_DAMPING, 0.0, 0.0]
-        joint.frictionloss = SERVO_FRICTION_LOSS
+        joint.damping = [unfitted["joint_damping"], 0.0, 0.0]
+        joint.frictionloss = response["joint_friction_loss"]
         actuator = spec.add_actuator(name=name, target=name)
         actuator.trntype = mujoco.mjtTrn.mjTRN_JOINT
-        actuator.set_to_position(kp=SERVO_POSITION_GAIN, kv=SERVO_VELOCITY_GAIN)
+        actuator.set_to_position(
+            kp=group["position_gain"], kv=group["velocity_damping"]
+        )
         actuator.ctrllimited = mujoco.mjtLimited.mjLIMITED_TRUE
         actuator.ctrlrange = joint.range
         actuator.forcelimited = mujoco.mjtLimited.mjLIMITED_TRUE
-        actuator.forcerange = [-SERVO_FORCE_LIMIT, SERVO_FORCE_LIMIT]
+        actuator.forcerange = [-unfitted["force_limit"], unfitted["force_limit"]]
+    spec.add_numeric(
+        name=COMMAND_DELAY_NUMERIC, data=[response["command_delay_seconds"]]
+    )
     # WHY: Collision uses each mesh's convex hull; a bounded hull keeps contact cheap on the
     # high-resolution CAD meshes, as Menagerie's SO-101 does.
     for mesh in spec.meshes:

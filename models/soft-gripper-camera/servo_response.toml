@@ -1,0 +1,62 @@
+# How the arm's STS3215 servos respond under the register settings below, for simulation
+# (build_mjcf.py writes these into robot-soft-gripper-camera.xml). The response is fitted to
+# real arm traces, so it holds only for these settings: the runtime's tests fail when the
+# commissioning defaults change, and the fit must then be redone.
+schema_version = 1
+
+# The register settings commissioning writes to every arm (runtime/src/commissioning/storage.rs
+# default_commissioning_gains and RegisterSettings, runtime/src/setup.rs ServoSettings). They are
+# the same on every arm; only the position gain differs by joint.
+[register_settings]
+position_gains_p_i_d = [16, 0, 32]
+position_gains_p_i_d_by_joint = { shoulder_lift = [32, 0, 32], elbow_flex = [32, 0, 32] }
+return_delay_time = 0
+maximum_acceleration = 254
+
+# MuJoCo position-servo response per gain group: actuator gain (kp, N m/rad), velocity damping
+# (kv, N m s/rad) and joint friction loss (N m). Fitted with so-supermimic
+# scripts/fit_servo_from_trace.py at commit 3f3fec9 (two gain groups, joints within the arms'
+# calibrated travel) to all four traces below, with a two-cycle (0.04 s) command delay: rms
+# 27.2 mrad over the motion windows. Cross-arm fits (fit on one arm, check on the other) at 0 to
+# 2 cycles stay within 26 to 38 (P16) and 39 to 130 (P32) gain and 2.6 to 3.6 damping. At 3 to 4
+# cycles the P32 gain runs off (180 to 1200), which no servo does; the shoulder and elbow then
+# show an effect the model lacks, likely the acceleration limit, which is not modelled yet.
+[response]
+command_delay_seconds = 0.04
+joint_friction_loss = 0.050
+gain_group_by_joint = { shoulder_pan = "P16", shoulder_lift = "P32", elbow_flex = "P32", wrist_flex = "P16", wrist_roll = "P16", gripper = "P16" }
+
+[response.gain_groups.P16]
+position_gain = 36.0
+velocity_damping = 3.20
+
+[response.gain_groups.P32]
+position_gain = 65.4
+velocity_damping = 2.81
+
+# Not fitted: rotor inertia reflected through the gearbox, passive joint damping and the stall
+# torque at 12 V (30 kg cm), from MuJoCo Menagerie's STS3215 model
+# (google-deepmind/mujoco_menagerie f3b6013).
+[response.unfitted]
+armature = 0.028
+# Passive joint damping (N m s/rad) under the fitted velocity damping; the fit held it fixed.
+joint_damping = 0.60
+force_limit = 2.94
+
+# Station executor traces (traces/executor), recorded 2026-11-19 on the real arms under IK + Ruckig.
+[[traces]]
+file = "executor-1795074973016100000-trace.jsonl"
+arm = "5B7B009457"  # board label 5
+sha256 = "3482d924b24011c675fd3443aaad8823df905d528ad5d413cc90811de19123a9"
+[[traces]]
+file = "executor-1795076159325474000-trace.jsonl"
+arm = "5B7B009457"  # board label 5
+sha256 = "6334707f6d9186487a0e5f2b9c2958e35d9c0d9b843c83bdbc42be69fe99de79"
+[[traces]]
+file = "executor-1795084834475139000-trace.jsonl"
+arm = "5CBC431221"  # board label 8
+sha256 = "b456864cdc2f1d4d9971050274a8ee7d6df4dc8ec386ef41991be07a868884d1"
+[[traces]]
+file = "executor-1795085551967280000-trace.jsonl"
+arm = "5CBC431221"  # board label 8
+sha256 = "961a400e1c37fbd3fc9ffca300b59bc36fa64428cb2b258446859f1ecd7ca55b"

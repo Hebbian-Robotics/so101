@@ -421,3 +421,70 @@ fn atomic_write(path: &Path, contents: &[u8]) -> Result<()> {
     }
     result
 }
+
+#[cfg(test)]
+mod servo_response_tests {
+    use std::collections::BTreeMap;
+
+    use serde::Deserialize;
+
+    use super::{RegisterSettings, default_commissioning_gains};
+    use crate::setup::MotorIds;
+
+    const JOINT_NAMES: [&str; 6] = [
+        "shoulder_pan",
+        "shoulder_lift",
+        "elbow_flex",
+        "wrist_flex",
+        "wrist_roll",
+        "gripper",
+    ];
+
+    #[derive(Deserialize)]
+    struct FittedRegisterSettings {
+        position_gains_p_i_d: [i64; 3],
+        position_gains_p_i_d_by_joint: BTreeMap<String, [i64; 3]>,
+        return_delay_time: u8,
+        maximum_acceleration: u8,
+    }
+
+    #[derive(Deserialize)]
+    struct ServoResponse {
+        register_settings: FittedRegisterSettings,
+    }
+
+    // WHY: The simulated servo response was fitted to arms running these settings; changing a
+    // commissioning default without refitting would leave simulation describing other servos.
+    #[test]
+    fn commissioning_defaults_match_the_settings_the_servo_response_was_fitted_under()
+    -> anyhow::Result<()> {
+        let response: ServoResponse = toml::from_str(include_str!(
+            "../../../models/soft-gripper-camera/servo_response.toml"
+        ))?;
+        let fitted = response.register_settings;
+        let commissioned = default_commissioning_gains(MotorIds::default());
+        let motor_ids = MotorIds::default().ordered();
+        for (joint, motor_id) in JOINT_NAMES.into_iter().zip(motor_ids) {
+            let commissioned_gains = commissioned
+                .position_gains_by_motor
+                .get(&motor_id.to_string())
+                .copied()
+                .unwrap_or(commissioned.position_gains);
+            let fitted_gains = fitted
+                .position_gains_p_i_d_by_joint
+                .get(joint)
+                .copied()
+                .unwrap_or(fitted.position_gains_p_i_d);
+            assert_eq!(commissioned_gains, fitted_gains, "{joint} position gains");
+        }
+        assert_eq!(
+            commissioned.return_delay_time,
+            Some(fitted.return_delay_time)
+        );
+        assert_eq!(
+            RegisterSettings::default().maximum_acceleration,
+            fitted.maximum_acceleration
+        );
+        Ok(())
+    }
+}

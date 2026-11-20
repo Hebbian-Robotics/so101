@@ -57,11 +57,16 @@ records the inputs.
 
 `build_mjcf.py` writes `robot-soft-gripper-camera.xml`, a MuJoCo model of the
 same assembly for simulation and policy training. It keeps the URDF's links,
-frames, collision meshes and inertials, adds the STS3215 joint dynamics and a
-position actuator per joint (from MuJoCo Menagerie's SO-101 servo model), adds a
+frames, collision meshes and inertials, adds a position actuator per joint with
+the servo response fitted to real arms ([servo_response.toml](servo_response.toml),
+including the command delay as the model's `command_delay_seconds` numeric), adds a
 `gripper_frame` site on `gripper_link` in the pose of `gripper_frame_link`, bounds
 each collision hull to 128 vertices and excludes contacts between
 jointed links.
+
+The servo response holds only for the register settings it was fitted under,
+which commissioning writes to every arm. A runtime test fails when those
+defaults change; refit the response from new traces before changing them.
 
 For calibration, set `model_variant = "soft-gripper-camera"` in the arm's
 `setup.toml`; omit it or use `"stock"` for the default. Control applications must
