@@ -59,7 +59,8 @@ records the inputs.
 same assembly for simulation and policy training. It keeps the URDF's links,
 frames, collision meshes and inertials, adds the STS3215 joint dynamics and a
 position actuator per joint (from MuJoCo Menagerie's SO-101 servo model), adds a
-`gripper_frame` site at `gripper_frame_link`, and excludes contacts between
+`gripper_frame` site on `gripper_link` in the pose of `gripper_frame_link`, bounds
+each collision hull to 128 vertices and excludes contacts between
 jointed links.
 
 For calibration, set `model_variant = "soft-gripper-camera"` in the arm's

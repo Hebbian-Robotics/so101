@@ -37,6 +37,7 @@ SERVO_POSITION_GAIN = 998.22
 SERVO_VELOCITY_GAIN = 2.731
 SERVO_FORCE_LIMIT = 2.94
 TOOL_SITE = "gripper_frame"
+MAXIMUM_HULL_VERTICES = 128
 
 
 def build_mjcf() -> None:
@@ -74,7 +75,16 @@ def build_mjcf() -> None:
         actuator.ctrlrange = joint.range
         actuator.forcelimited = mujoco.mjtLimited.mjLIMITED_TRUE
         actuator.forcerange = [-SERVO_FORCE_LIMIT, SERVO_FORCE_LIMIT]
-    spec.body("gripper_frame_link").add_site(name=TOOL_SITE)
+    # WHY: Collision uses each mesh's convex hull; a bounded hull keeps contact cheap on the
+    # high-resolution CAD meshes, as Menagerie's SO-101 does.
+    for mesh in spec.meshes:
+        mesh.maxhullvert = MAXIMUM_HULL_VERTICES
+    # WHY: Kinematics code reads the tool as an offset on the wrist-roll body, the last jointed
+    # link, so the site sits there in the fixed tool frame's pose.
+    tool_frame = spec.compile().body("gripper_frame_link")
+    spec.body("gripper_link").add_site(
+        name=TOOL_SITE, pos=tool_frame.pos.tolist(), quat=tool_frame.quat.tolist()
+    )
     # WHY: MuJoCo skips parent-child contacts only between moving bodies; the base is fixed
     # to the world, and its servo horn sits inside the shoulder's meshes.
     for joint in urdf.findall("joint"):
