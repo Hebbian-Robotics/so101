@@ -41,7 +41,7 @@ export function ThemeMenu({
               <DropdownMenuTrigger
                 render={
                   <Button
-                    className="theme-trigger h-11 min-w-11 gap-1 px-2 text-muted-foreground"
+                    className="h-11 min-w-11 gap-1 px-2 text-muted-foreground aria-expanded:bg-accent"
                     type="button"
                     variant="ghost"
                     aria-label={`Theme: ${themeOptions[theme].label}`}

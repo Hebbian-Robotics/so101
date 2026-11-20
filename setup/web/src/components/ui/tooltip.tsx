@@ -23,6 +23,7 @@ function TooltipTrigger({ ...props }: TooltipPrimitive.Trigger.Props) {
 }
 
 function TooltipContent({
+  align = "center",
   className,
   collisionPadding,
   side = "top",
@@ -32,11 +33,12 @@ function TooltipContent({
 }: TooltipPrimitive.Popup.Props &
   Pick<
     TooltipPrimitive.Positioner.Props,
-    "collisionPadding" | "side" | "sideOffset"
+    "align" | "collisionPadding" | "side" | "sideOffset"
   >) {
   return (
     <TooltipPrimitive.Portal>
       <TooltipPrimitive.Positioner
+        align={align}
         className="isolate z-50"
         collisionPadding={collisionPadding}
         side={side}
