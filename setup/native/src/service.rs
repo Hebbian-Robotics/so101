@@ -196,8 +196,8 @@ pub async fn serve(
             local_requests,
         ))
         .with_state(state);
-    let _endpoint = directory.publish(&address)?;
     let launch_page = directory.publish_launch_page(&address)?;
+    let _endpoint = directory.publish(&address)?;
     println!("SO-101 setup: {}", address.launch_url());
     if !no_browser && let Err(error) = open::that_detached(&launch_page.0) {
         eprintln!("Could not open the browser: {error}");
@@ -265,6 +265,10 @@ async fn local_requests(State(state): State<HttpState>, request: Request, next: 
     let headers = response.headers_mut();
     headers.insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
     headers.insert(
+        header::REFERRER_POLICY,
+        HeaderValue::from_static("no-referrer"),
+    );
+    headers.insert(
         header::X_CONTENT_TYPE_OPTIONS,
         HeaderValue::from_static("nosniff"),
     );
@@ -325,8 +329,8 @@ fn presents_launch_token(request: &Request, address: &ServiceAddress) -> bool {
 }
 
 async fn asset(State(state): State<HttpState>, request: Request) -> Response {
-    let path = request.uri().path().trim_start_matches('/');
-    let index = matches!(path, "" | "motor-ids");
+    let path = request.uri().path();
+    let index = matches!(path, "/" | "/motor-ids");
     // Every local account can reach the loopback listener, so the session cookie is issued
     // only to a browser holding the launch token from the operator's private files.
     if index && presents_launch_token(&request, &state.address) {
@@ -334,10 +338,7 @@ async fn asset(State(state): State<HttpState>, request: Request) -> Response {
             "{COOKIE}={}; HttpOnly; SameSite=Strict; Path=/",
             state.address.token
         );
-        return match (
-            HeaderValue::from_str(&session),
-            HeaderValue::from_str(request.uri().path()),
-        ) {
+        return match (HeaderValue::from_str(&session), HeaderValue::from_str(path)) {
             (Ok(session), Ok(location)) => (
                 StatusCode::SEE_OTHER,
                 [(header::SET_COOKIE, session), (header::LOCATION, location)],
@@ -346,7 +347,11 @@ async fn asset(State(state): State<HttpState>, request: Request) -> Response {
             _ => StatusCode::INTERNAL_SERVER_ERROR.into_response(),
         };
     }
-    let name = if index { "index.html" } else { path };
+    let name = if index {
+        "index.html"
+    } else {
+        path.trim_start_matches('/')
+    };
     let Some((_, bytes)) = ASSETS.iter().find(|(key, _)| *key == name) else {
         return StatusCode::NOT_FOUND.into_response();
     };
@@ -519,6 +524,50 @@ pub fn resolve_directory(path: Option<&Path>) -> Result<PathBuf> {
 mod tests {
     use super::*;
 
+    fn open_browser_session(browser: &ureq::Agent, address: &ServiceAddress) -> Result<String> {
+        let mut page = browser.get(format!("{}/", address.url())).call()?;
+        assert_eq!(page.status(), StatusCode::OK);
+        assert!(page.headers().get(header::SET_COOKIE).is_none());
+        let document = page.body_mut().read_to_string()?;
+        assert!(document.contains("<title>Hebbian Robotics SO-101</title>"));
+        let motor_ids_page = browser.get(format!("{}/motor-ids", address.url())).call()?;
+        assert_eq!(motor_ids_page.status(), StatusCode::OK);
+        assert!(motor_ids_page.headers().get(header::SET_COOKIE).is_none());
+        let guessed = browser
+            .get(format!("{}/?{LAUNCH_PARAMETER}=guess", address.url()))
+            .call()?;
+        assert!(guessed.headers().get(header::SET_COOKIE).is_none());
+
+        let rejected = browser.get(format!("{}/api/state", address.url())).call()?;
+        assert_eq!(rejected.status(), StatusCode::UNAUTHORIZED);
+        let rejected = browser
+            .post(format!("{}/api/action", address.url()))
+            .header(header::ORIGIN, address.url())
+            .send_json(&Action::Disconnect)?;
+        assert_eq!(rejected.status(), StatusCode::UNAUTHORIZED);
+
+        let launch = browser.get(address.launch_url()).call()?;
+        assert_eq!(launch.status(), StatusCode::SEE_OTHER);
+        assert_eq!(launch.headers()[header::REFERRER_POLICY], "no-referrer");
+        assert_eq!(
+            launch
+                .headers()
+                .get(header::LOCATION)
+                .map(HeaderValue::as_bytes),
+            Some(b"/".as_slice())
+        );
+        let cookie = launch
+            .headers()
+            .get(header::SET_COOKIE)
+            .context("No browser session")?
+            .to_str()?
+            .split(';')
+            .next()
+            .context("Invalid cookie")?
+            .to_owned();
+        Ok(cookie)
+    }
+
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn bundled_ui_and_cli_share_a_local_server() -> Result<()> {
         let scratch = tempfile::tempdir()?;
@@ -563,41 +612,11 @@ mod tests {
                     .timeout_global(Some(Duration::from_secs(5)))
                     .build()
                     .new_agent();
-                let mut page = browser.get(format!("{}/", address.url())).call()?;
-                assert_eq!(page.status(), StatusCode::OK);
-                assert!(page.headers().get(header::SET_COOKIE).is_none());
-                let document = page.body_mut().read_to_string()?;
-                assert!(document.contains("<title>Hebbian Robotics SO-101</title>"));
-                let guessed = browser
-                    .get(format!("{}/?{LAUNCH_PARAMETER}=guess", address.url()))
-                    .call()?;
-                assert!(guessed.headers().get(header::SET_COOKIE).is_none());
-
-                let launch = browser.get(address.launch_url()).call()?;
-                assert_eq!(launch.status(), StatusCode::SEE_OTHER);
-                assert_eq!(
-                    launch
-                        .headers()
-                        .get(header::LOCATION)
-                        .map(HeaderValue::as_bytes),
-                    Some(b"/".as_slice())
-                );
-                let cookie = launch
-                    .headers()
-                    .get(header::SET_COOKIE)
-                    .context("No browser session")?
-                    .to_str()?
-                    .split(';')
-                    .next()
-                    .context("Invalid cookie")?
-                    .to_owned();
                 let model = browser
                     .get(format!("{}/robot/so101/robot.urdf", address.url()))
                     .call()?;
                 assert_eq!(model.status(), StatusCode::OK);
-                let rejected = browser.get(format!("{}/api/state", address.url())).call()?;
-                assert_eq!(rejected.status(), StatusCode::UNAUTHORIZED);
-
+                let cookie = open_browser_session(&browser, &address)?;
                 let mut browser_state = browser
                     .get(format!("{}/api/state", address.url()))
                     .header(header::COOKIE, &cookie)

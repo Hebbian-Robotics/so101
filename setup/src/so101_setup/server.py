@@ -626,6 +626,7 @@ class CalibrationRequestHandler(BaseHTTPRequestHandler):
             self.send_header("Location", path)
             self.send_header("Content-Length", "0")
             self.send_header("Cache-Control", "no-store")
+            self.send_header("Referrer-Policy", "no-referrer")
             self.send_header(
                 "Set-Cookie", f"so101_session={self.token}; HttpOnly; SameSite=Strict; Path=/"
             )

@@ -27,6 +27,7 @@ def test_api_requires_session_authorization_and_static_requests_stay_inside_asse
         thread.start()
         try:
             connection = HTTPConnection("127.0.0.1", server.server_port, timeout=5)
+            local_origin = f"http://127.0.0.1:{server.server_port}"
             for method, path, body, expected in [
                 ("GET", "/api/state", None, 401),
                 ("GET", "/api/events", None, 401),
@@ -43,10 +44,17 @@ def test_api_requires_session_authorization_and_static_requests_stay_inside_asse
                 assert response.status == 200
                 assert response.getheader("Set-Cookie") is None
                 response.read()
+            connection.request(
+                "POST", "/api/action", '{"action":"disconnect"}', {"Origin": local_origin}
+            )
+            response = connection.getresponse()
+            assert response.status == 401
+            response.read()
             connection.request("GET", "/?token=session-token")
             response = connection.getresponse()
             assert response.status == 303
             assert response.getheader("Location") == "/"
+            assert response.getheader("Referrer-Policy") == "no-referrer"
             cookie_header = response.getheader("Set-Cookie")
             assert cookie_header is not None
             session_cookie = cookie_header.split(";", 1)[0]
@@ -79,7 +87,7 @@ def test_api_requires_session_authorization_and_static_requests_stay_inside_asse
                 "POST",
                 "/api/action",
                 '{"action":"enable_torque"}',
-                {"Cookie": session_cookie, "Origin": f"http://127.0.0.1:{server.server_port}"},
+                {"Cookie": session_cookie, "Origin": local_origin},
             )
             response = connection.getresponse()
             assert response.status == 400
