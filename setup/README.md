@@ -86,9 +86,15 @@ runs, defined once in the runtime's `servo_registers` module: position gains
 (P/I/D 32/0/32 on the shoulder lift and elbow, 16/0/32 elsewhere), return delay
 0 and maximum acceleration 254 on all six motors, and gripper maximum torque 500
 and protection current 250. These are raw register values. A single-joint
-recalibration leaves them alone. Per-arm overrides are not supported: a
-`setup.toml` with a `[servos]` section or a `servo-overrides.toml` beside it is
-refused. The legacy Python setup still carries its own copy of these values.
+recalibration leaves them alone. The legacy Python setup still carries its own
+copy of these values.
+
+For an arm that needs different values, manually add `servo-overrides.toml`
+beside its `setup.toml`. Set only the keys it needs:
+`maximum_acceleration`, `gripper_max_torque_limit`, or
+`gripper_protection_current`. The tool applies them on the next full save.
+New arm setups do not create this file. The simulated servo response is fitted
+to the standard registers, so it does not describe an arm with overrides.
 
 ## Reset servo parameters
 

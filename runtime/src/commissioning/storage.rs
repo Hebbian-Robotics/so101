@@ -3,7 +3,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, ensure};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 use crate::calibration::so_follower_calibration_path;
@@ -19,6 +19,16 @@ use crate::setup::{
 
 use super::draft::{CalibrationEntries, Draft};
 use super::hardware::{INCOMPLETE_RESET_FILE, SetupBus, read_arm, require_torque_off, write_new};
+
+/// Per-arm changes to the standard servo registers, from `servo-overrides.toml` beside the
+/// arm's `setup.toml`. Unset keys keep the standard value.
+#[derive(Debug, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ServoRegisterOverrides {
+    maximum_acceleration: Option<u8>,
+    gripper_max_torque_limit: Option<u16>,
+    gripper_protection_current: Option<u16>,
+}
 
 const REGISTERS: &[&str] = &[
     "homing_offset",
@@ -134,14 +144,29 @@ impl ArmFiles {
             && self.load().is_ok_and(|saved| saved == *setup)
     }
 
-    fn require_no_register_overrides(&self) -> Result<()> {
+    // WHY: A user whose arm misbehaves with the standard registers can change these three for
+    // that arm alone, without touching control code; new setups never create the file.
+    fn register_overrides(&self) -> Result<ServoRegisterOverrides> {
         let path = self.directory.join("servo-overrides.toml");
+        if !path.try_exists()? {
+            return Ok(ServoRegisterOverrides::default());
+        }
+        let overrides: ServoRegisterOverrides = toml::from_str(&fs::read_to_string(&path)?)
+            .with_context(|| format!("Invalid {}", path.display()))?;
         ensure!(
-            !path.try_exists()?,
-            "{} is no longer supported: every arm runs the standard servo registers. Remove it.",
+            overrides
+                .maximum_acceleration
+                .is_none_or(|value| value <= 254)
+                && overrides
+                    .gripper_max_torque_limit
+                    .is_none_or(|value| value <= 1000)
+                && overrides
+                    .gripper_protection_current
+                    .is_none_or(|value| value <= 310),
+            "Servo register override in {} is outside the supported range",
             path.display()
         );
-        Ok(())
+        Ok(overrides)
     }
 
     pub(super) fn save(
@@ -242,7 +267,7 @@ impl ArmFiles {
         previous: &RegisterValues,
         updates: &mut RegisterValues,
     ) -> Result<()> {
-        self.require_no_register_overrides()?;
+        let overrides = self.register_overrides()?;
         let position_mode = rustypot::servo::feetech::sts3215::INFO
             .operating_modes
             .iter()
@@ -251,13 +276,28 @@ impl ArmFiles {
             .context("Missing STS3215 position mode")?;
         updates.insert("operating_mode", [position_mode; 6]);
         updates.insert("return_delay_time", [i64::from(RETURN_DELAY_TIME); 6]);
-        updates.insert("maximum_acceleration", [i64::from(MAXIMUM_ACCELERATION); 6]);
+        updates.insert(
+            "maximum_acceleration",
+            [i64::from(
+                overrides
+                    .maximum_acceleration
+                    .unwrap_or(MAXIMUM_ACCELERATION),
+            ); 6],
+        );
         let gripper_index = So101Joint::ALL.len() - 1;
         let mut max_torque = previous["max_torque_limit"];
-        max_torque[gripper_index] = i64::from(GRIPPER_MAX_TORQUE_LIMIT);
+        max_torque[gripper_index] = i64::from(
+            overrides
+                .gripper_max_torque_limit
+                .unwrap_or(GRIPPER_MAX_TORQUE_LIMIT),
+        );
         updates.insert("max_torque_limit", max_torque);
         let mut protection_current = previous["protection_current"];
-        protection_current[gripper_index] = i64::from(GRIPPER_PROTECTION_CURRENT);
+        protection_current[gripper_index] = i64::from(
+            overrides
+                .gripper_protection_current
+                .unwrap_or(GRIPPER_PROTECTION_CURRENT),
+        );
         updates.insert("protection_current", protection_current);
 
         // INVARIANT: Register arrays follow MotorIds::ordered(), which is So101Joint::ALL order.
@@ -367,4 +407,70 @@ fn atomic_write(path: &Path, contents: &[u8]) -> Result<()> {
         let _ = fs::remove_file(temporary);
     }
     result
+}
+
+#[cfg(test)]
+mod servo_register_override_tests {
+    use super::{ArmFiles, ServoRegisterOverrides};
+    use crate::discovery::ControllerSerial;
+    use crate::setup::ModelVariant;
+
+    struct ArmDirectory(std::path::PathBuf);
+
+    impl Drop for ArmDirectory {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
+    fn arm_with_overrides(
+        name: &str,
+        overrides: Option<&str>,
+    ) -> anyhow::Result<(ArmDirectory, ArmFiles)> {
+        let directory = std::env::temp_dir().join(format!(
+            "so101-servo-overrides-{name}-{}",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&directory)?;
+        if let Some(text) = overrides {
+            std::fs::write(directory.join("servo-overrides.toml"), text)?;
+        }
+        let files = ArmFiles::new(
+            directory.clone(),
+            &directory,
+            ControllerSerial::parse("ARM_A")?,
+            ModelVariant::SoftGripperCamera,
+        );
+        Ok((ArmDirectory(directory), files))
+    }
+
+    #[test]
+    fn an_arm_without_an_override_file_runs_the_standard_registers() -> anyhow::Result<()> {
+        let (_directory, files) = arm_with_overrides("absent", None)?;
+        let overrides: ServoRegisterOverrides = files.register_overrides()?;
+        assert!(overrides.maximum_acceleration.is_none());
+        assert!(overrides.gripper_max_torque_limit.is_none());
+        assert!(overrides.gripper_protection_current.is_none());
+        Ok(())
+    }
+
+    #[test]
+    fn an_override_file_changes_only_the_keys_it_sets() -> anyhow::Result<()> {
+        let (_directory, files) =
+            arm_with_overrides("partial", Some("maximum_acceleration = 100\n"))?;
+        let overrides = files.register_overrides()?;
+        assert_eq!(overrides.maximum_acceleration, Some(100));
+        assert!(overrides.gripper_max_torque_limit.is_none());
+        Ok(())
+    }
+
+    #[test]
+    fn out_of_range_or_unknown_overrides_are_refused() -> anyhow::Result<()> {
+        let (_too_high, files) =
+            arm_with_overrides("range", Some("gripper_protection_current = 400\n"))?;
+        assert!(files.register_overrides().is_err());
+        let (_unknown, files) = arm_with_overrides("unknown", Some("p_coefficient = 8\n"))?;
+        assert!(files.register_overrides().is_err());
+        Ok(())
+    }
 }
