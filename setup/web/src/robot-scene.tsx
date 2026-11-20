@@ -121,7 +121,7 @@ export function RobotScene(props: SceneProps) {
             >
               <color
                 attach="background"
-                args={[props.darkMode ? "#192737" : "#e9eff5"]}
+                args={[props.darkMode ? "#242424" : "#eeeeee"]}
               />
               <hemisphereLight args={[0xffffff, 0x888888, 1.5]} />
               <directionalLight position={[2, -3, 4]} intensity={1.5} />
@@ -129,8 +129,8 @@ export function RobotScene(props: SceneProps) {
                 args={[
                   2,
                   20,
-                  props.darkMode ? 0x607589 : 0x8a9fb2,
-                  props.darkMode ? 0x34485d : 0xd0dce7,
+                  props.darkMode ? 0x777777 : 0xaaaaaa,
+                  props.darkMode ? 0x424242 : 0xd8d8d8,
                 ]}
                 rotation={[Math.PI / 2, 0, 0]}
               />

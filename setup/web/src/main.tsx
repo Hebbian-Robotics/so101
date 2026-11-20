@@ -9,6 +9,14 @@ import {
   NativeSelect,
   NativeSelectOption,
 } from "@/components/ui/native-select";
+import {
+  Sidebar,
+  SidebarFooter,
+  SidebarHeader,
+  SidebarMenu,
+  SidebarMenuButton,
+  SidebarMenuItem,
+} from "@/components/ui/sidebar";
 import { apiErrorSchema, requestJson } from "./api.js";
 import hebbianLogo from "./hebbian-logo.svg";
 import { MotorIds } from "./motor-ids.js";
@@ -107,8 +115,8 @@ const labels: Record<string, string> = {
 };
 const calibrationCameraPosition: [number, number, number] = [0.9, -0.9, 0.75];
 const calibrationCameraTarget: [number, number, number] = [0.1, 0, 0.25];
-const previewCameraPosition: [number, number, number] = [0.61, -0.62, 0.48];
-const previewCameraTarget: [number, number, number] = [0.16, 0, 0.17];
+const restingCameraPosition: [number, number, number] = [0.43, -0.46, 0.32];
+const restingCameraTarget: [number, number, number] = [0.03, 0, 0.08];
 
 async function submitCalibrationAction(
   action: Action,
@@ -243,33 +251,49 @@ function App() {
   const showReference =
     stage === "reference" ||
     Boolean(view?.can_recalibrate_joint && jointToRecalibrate);
+  const showRestingPose = previewingModel || showReference;
   const softGripper = view?.model_variant === "soft-gripper-camera";
   const measuredAngles = new Map(
     view?.joints.map((joint) => [joint.name, joint.position_radians]),
   );
   return (
-    <main>
-      <header className="app-bar">
-        <div className="brand">
-          <img src={hebbianLogo} alt="" />
-          <span>
-            Hebbian <strong>Robot Use</strong>
-          </span>
-        </div>
+    <div className="setup-layout">
+      <Sidebar className="setup-sidebar">
+        <SidebarHeader className="p-0">
+          <div className="brand">
+            <img src={hebbianLogo} alt="" />
+            <span>
+              Hebbian <strong>Robot Use</strong>
+            </span>
+          </div>
+        </SidebarHeader>
         <nav className="setup-navigation" aria-label="SO-101 setup">
-          <a href="/" aria-current={programmingMotorIds ? undefined : "page"}>
-            <SlidersHorizontal aria-hidden="true" />
-            Calibrate arm
-          </a>
-          <a
-            href="/motor-ids"
-            aria-current={programmingMotorIds ? "page" : undefined}
-          >
-            <Cpu aria-hidden="true" />
-            Program motor IDs
-          </a>
+          <SidebarMenu>
+            <SidebarMenuItem>
+              <SidebarMenuButton asChild isActive={!programmingMotorIds}>
+                <a
+                  href="/"
+                  aria-current={programmingMotorIds ? undefined : "page"}
+                >
+                  <SlidersHorizontal aria-hidden="true" />
+                  Calibrate arm
+                </a>
+              </SidebarMenuButton>
+            </SidebarMenuItem>
+            <SidebarMenuItem>
+              <SidebarMenuButton asChild isActive={programmingMotorIds}>
+                <a
+                  href="/motor-ids"
+                  aria-current={programmingMotorIds ? "page" : undefined}
+                >
+                  <Cpu aria-hidden="true" />
+                  Program motor IDs
+                </a>
+              </SidebarMenuButton>
+            </SidebarMenuItem>
+          </SidebarMenu>
         </nav>
-        <div className="app-tools">
+        <SidebarFooter className="app-tools flex-row p-0">
           <a
             className="github-link"
             href="https://github.com/Hebbian-Robotics/so101"
@@ -281,10 +305,10 @@ function App() {
             <span className="visually-hidden">SO-101 GitHub repository</span>
           </a>
           <ThemeMenu theme={theme} onThemeChange={setTheme} />
-        </div>
-      </header>
+        </SidebarFooter>
+      </Sidebar>
 
-      <div className="setup-content">
+      <main className="setup-content">
         <header className="page-heading">
           <div>
             <h1>{programmingMotorIds ? "Program motor IDs" : "Calibration"}</h1>
@@ -788,13 +812,15 @@ function App() {
             >
               {stage === "sweep" ? (
                 <p role="status">The model appears after the sweep.</p>
+              ) : !view ? (
+                <p role="status">Waiting for the calibration server…</p>
               ) : (
                 <Suspense fallback={<p role="status">Loading SO-101 model…</p>}>
                   <RobotScene
                     darkMode={darkMode}
                     title={
                       previewingModel
-                        ? "Robot preview"
+                        ? "Resting pose preview"
                         : showReference
                           ? "Resting pose reference"
                           : stage === "saved" || stage === "error"
@@ -807,28 +833,26 @@ function App() {
                         : "robot/so101/robot.urdf"
                     }
                     cameraPosition={
-                      previewingModel
-                        ? previewCameraPosition
+                      showRestingPose
+                        ? restingCameraPosition
                         : calibrationCameraPosition
                     }
                     cameraTarget={
-                      previewingModel
-                        ? previewCameraTarget
+                      showRestingPose
+                        ? restingCameraTarget
                         : calibrationCameraTarget
                     }
                     jointNames={jointNames}
                     measuredJoints={
-                      previewingModel
-                        ? jointNames.map(() => 0)
-                        : showReference
-                          ? (view?.home_joints_radians ?? [])
-                          : jointNames.map(
-                              (name) => measuredAngles.get(name) ?? null,
-                            )
+                      showRestingPose
+                        ? view.home_joints_radians
+                        : jointNames.map(
+                            (name) => measuredAngles.get(name) ?? null,
+                          )
                     }
                     gripperAngleRadians={
-                      showReference
-                        ? view?.home_gripper_radians
+                      showRestingPose
+                        ? view.home_gripper_radians
                         : measuredAngles.get("gripper")
                     }
                   />
@@ -928,8 +952,8 @@ function App() {
             </section>
           </div>
         )}
-      </div>
-    </main>
+      </main>
+    </div>
   );
 }
 

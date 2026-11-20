@@ -27,29 +27,55 @@
   --color-border: var(--border);
   --color-input: var(--control-border);
   --color-ring: var(--focus);
+  --color-sidebar: var(--background);
+  --color-sidebar-foreground: var(--text);
+  --color-sidebar-accent: var(--hover);
+  --color-sidebar-accent-foreground: var(--text);
+  --color-sidebar-ring: var(--focus);
   --color-destructive: var(--error-border);
 }
 
 :root {
   color-scheme: light dark;
-  --text: light-dark(#192638, #e9f0f7);
-  --muted: light-dark(#526377, #a8b9cb);
-  --background: light-dark(#f0f4f8, #101923);
-  --panel: light-dark(#ffffff, #172331);
-  --subtle: light-dark(#e9eff5, #202e3f);
-  --border: light-dark(#d2dce7, #37495b);
-  --control-border: light-dark(#a9b8c9, #526981);
-  --hover: light-dark(#e5edf5, #293b50);
-  --accent: light-dark(#1755a3, #9ccaff);
-  --accent-text: light-dark(#ffffff, #14283e);
-  --selected: light-dark(#e5effc, #263e59);
-  --focus: light-dark(#1960b7, #9ccaff);
-  --error-text: light-dark(#862b26, #ffd0c8);
-  --error-background: light-dark(#fff0ed, #442926);
-  --error-border: light-dark(#b43b32, #f08e7e);
-  --verified: light-dark(#166548, #91daba);
-  --verified-background: light-dark(#e9f5ee, #213c37);
-  font-family: "Avenir Next", "Segoe UI", system-ui, sans-serif;
+  --text: #242424;
+  --muted: #686868;
+  --background: #f3f3f3;
+  --panel: #ffffff;
+  --subtle: #f5f5f5;
+  --border: #dedede;
+  --control-border: #a9a9a9;
+  --hover: #ededed;
+  --accent: #353535;
+  --accent-text: #ffffff;
+  --selected: #e8e8e8;
+  --focus: #353535;
+  --error-text: #962d2d;
+  --error-background: #fff0ed;
+  --error-border: #b43b32;
+  --verified: #166548;
+  --verified-background: #e9f5ee;
+
+  @variant dark {
+    --text: #eeeeee;
+    --muted: #b0b0b0;
+    --background: #171717;
+    --panel: #242424;
+    --subtle: #2c2c2c;
+    --border: #424242;
+    --control-border: #767676;
+    --hover: #383838;
+    --accent: #eeeeee;
+    --accent-text: #242424;
+    --selected: #383838;
+    --focus: #eeeeee;
+    --error-text: #ffd0c8;
+    --error-background: #4a2626;
+    --error-border: #f08e7e;
+    --verified: #91daba;
+    --verified-background: #213c37;
+  }
+
+  font-family: "Avenir Next", Avenir, "Segoe UI", system-ui, sans-serif;
   line-height: 1.5;
   color: var(--text);
   background: var(--background);
@@ -79,11 +105,26 @@ body {
   margin: 0;
 }
 
-main {
+.setup-layout {
+  display: grid;
+  grid-template-columns: 14rem minmax(0, 1fr);
   min-block-size: 100dvh;
-  max-inline-size: 86rem;
+  max-inline-size: 96rem;
   margin-inline: auto;
-  padding: 0 clamp(1rem, 3.5vw, 3rem) 3rem;
+}
+
+.setup-sidebar {
+  position: sticky;
+  inset-block-start: 0;
+  display: flex;
+  flex-direction: column;
+  align-self: start;
+  gap: 24px;
+  min-block-size: 100dvh;
+  max-block-size: 100dvh;
+  overflow-y: auto;
+  border-inline-end: 1px solid var(--border);
+  padding: 24px 12px 16px;
 }
 
 h1,
@@ -111,15 +152,6 @@ p {
   line-height: 1.55;
 }
 
-.app-bar {
-  display: grid;
-  grid-template-columns: 1fr auto 1fr;
-  align-items: center;
-  gap: 16px;
-  min-block-size: 76px;
-  border-block-end: 1px solid var(--border);
-}
-
 .brand,
 .app-tools,
 .setup-navigation,
@@ -132,39 +164,32 @@ p {
 
 .brand {
   gap: 10px;
+  padding-inline: 6px;
   font-size: 14px;
   white-space: nowrap;
 }
 
 .brand img {
+  flex: none;
   inline-size: 31px;
   block-size: 31px;
 }
 
 .app-tools {
-  justify-self: end;
+  margin-block-start: auto;
   gap: 5px;
 }
 
-.setup-navigation {
-  min-inline-size: 0;
-  gap: 4px;
-  padding: 4px;
-  background: var(--subtle);
-  border-radius: 10px;
-}
-
 .setup-navigation a {
-  justify-content: center;
-  gap: 7px;
-  min-block-size: 38px;
-  padding: 5px 11px;
-  border-radius: 7px;
+  gap: 8px;
+  min-block-size: 44px;
+  padding: 7px 9px;
+  border-inline-start: 3px solid transparent;
+  border-radius: 5px;
   color: var(--muted);
   font-size: 14px;
   font-weight: 600;
   text-decoration: none;
-  text-align: center;
 }
 
 .setup-navigation a:hover,
@@ -173,10 +198,10 @@ p {
   background: var(--hover);
 }
 
-.setup-navigation a[aria-current="page"] {
+.setup-navigation [data-active="true"] {
   color: var(--accent);
   background: var(--panel);
-  box-shadow: 0 1px 3px light-dark(#20375322, #03091088);
+  border-inline-start-color: var(--accent);
 }
 
 .setup-navigation svg,
@@ -207,7 +232,7 @@ p {
 }
 
 .setup-content {
-  padding-block-start: clamp(1.25rem, 3vw, 2.5rem);
+  padding: clamp(1.25rem, 3vw, 2.5rem) clamp(1rem, 3vw, 2.5rem) 3rem;
 }
 
 .page-heading {
@@ -288,6 +313,11 @@ p {
 a:focus-visible {
   outline: 2px solid var(--focus);
   outline-offset: 3px;
+}
+
+.setup-navigation a:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: -2px;
 }
 
 .controller {
@@ -526,16 +556,32 @@ pre {
   }
 }
 
-@media (max-width: 700px) {
-  .app-bar {
-    grid-template-columns: 1fr auto;
-    gap: 6px 12px;
-    padding-block: 8px;
+@media (max-width: 900px) {
+  .setup-layout {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .setup-sidebar {
+    position: static;
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    align-items: center;
+    gap: 8px 12px;
+    min-block-size: auto;
+    max-block-size: none;
+    padding: 8px 1rem;
+    border-inline-end: 0;
+    border-block-end: 1px solid var(--border);
+  }
+
+  .brand {
+    white-space: normal;
   }
 
   .app-tools {
     grid-column: 2;
     grid-row: 1;
+    margin-block-start: 0;
   }
 
   .setup-navigation {
@@ -543,13 +589,30 @@ pre {
     grid-row: 2;
   }
 
-  .setup-navigation a {
+  .setup-navigation ul {
+    flex-direction: row;
+    flex-wrap: wrap;
+  }
+
+  .setup-navigation li {
     flex: 1;
-    gap: 6px;
+    min-inline-size: min-content;
+  }
+
+  .setup-navigation a {
+    justify-content: center;
     padding-inline: 7px;
+    border-inline-start: 0;
+    border-block-end: 2px solid transparent;
     font-size: 13px;
   }
 
+  .setup-navigation [data-active="true"] {
+    border-block-end-color: var(--accent);
+  }
+}
+
+@media (max-width: 700px) {
   .workspace {
     grid-template-columns: minmax(0, 1fr);
     gap: 12px;
