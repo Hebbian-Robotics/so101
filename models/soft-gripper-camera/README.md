@@ -40,6 +40,7 @@ Run from the source checkout:
 
 ```sh
 uv run models/soft-gripper-camera/tools/build_model.py
+uv run models/soft-gripper-camera/tools/build_mjcf.py
 ```
 
 The generator checks the pinned CAD checksum and writes the optional URDF and
@@ -47,6 +48,19 @@ meshes under `setup/src/so101_setup/assets/robot/so101`. It does not modify the
 stock URDF. Source dimensions are millimeters; exported meshes use meters.
 The separate mount STL translates into STEP coordinates by
 `[18.523165, -54.884434, -44.800674]` mm with no rotation.
+
+The gripper and moving-jaw inertials are estimates, not weighings: each printed
+part's CAD volume times its material density and an effective fill, plus the
+camera module as a uniform box, with the replaced stock wrist part removed from
+the stock gripper inertial. [sources.toml](sources.toml) `[mass_estimate]`
+records the inputs.
+
+`build_mjcf.py` writes `robot-soft-gripper-camera.xml`, a MuJoCo model of the
+same assembly for simulation and policy training. It keeps the URDF's links,
+frames, collision meshes and inertials, adds the STS3215 joint dynamics and a
+position actuator per joint (from MuJoCo Menagerie's SO-101 servo model), adds a
+`gripper_frame` site at `gripper_frame_link`, and excludes contacts between
+jointed links.
 
 For calibration, set `model_variant = "soft-gripper-camera"` in the arm's
 `setup.toml`; omit it or use `"stock"` for the default. Control applications must

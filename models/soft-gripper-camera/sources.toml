@@ -66,3 +66,17 @@ screw_axis_points_mm = [[23.329138, 11.877, -26.827697], [23.400440, 11.877, -34
 screw_spacing_mm = 8.1
 gripper_hole_radius_mm = 1.25
 mount_clearance_hole_radius_mm = 1.65
+
+# Estimated, not weighed: the printed parts' solid CAD volumes times their material density
+# and an effective fill (walls plus sparse infill; the upstream instructions give no infill),
+# and the camera module as a uniform board-sized box.
+[mass_estimate]
+pla_density_kg_per_m3 = 1240.0
+tpu_density_kg_per_m3 = 1210.0
+pla_effective_fill = 0.6
+tpu_effective_fill = 0.6
+camera_module_mass_kg = 0.008
+camera_module_mass_basis = "estimate for a 38 x 38 mm USB board with lens and short cable; not weighed"
+# The stock wrist-roll follower the soft gripper body replaces; its estimate is removed from the
+# stock gripper_link inertial, which covers the wrist-roll servo and that part.
+replaced_stock_part = "wrist_roll_follower_so101_v1.stl"

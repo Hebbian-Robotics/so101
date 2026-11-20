@@ -71,6 +71,137 @@ def triangle_mesh(shape: cadquery.Shape, transform: Vector) -> trimesh.Trimesh:
     return mesh
 
 
+class MassMoments:
+    """Mass, first and second moments about a link origin; these add and subtract."""
+
+    def __init__(self, mass: float, first: Vector, second: Vector) -> None:
+        self.mass, self.first, self.second = mass, first, second
+
+    @classmethod
+    def from_center(cls, mass: float, center: Vector, inertia: Vector) -> "MassMoments":
+        about_center = 0.5 * numpy.trace(inertia) * numpy.eye(3) - inertia
+        return cls(
+            mass, mass * center, about_center + mass * numpy.outer(center, center)
+        )
+
+    @classmethod
+    def from_mesh(cls, mesh: trimesh.Trimesh, density: float) -> "MassMoments":
+        # WHY: Tessellations and the stock meshes have small holes; their signed volume
+        # still measures the part, so they only need a positive volume.
+        if mesh.volume <= 0:
+            raise ValueError("Mass needs a mesh with positive volume")
+        solid = mesh.copy()
+        solid.density = density
+        return cls.from_center(
+            float(solid.mass),
+            numpy.asarray(solid.center_mass),
+            numpy.asarray(solid.moment_inertia),
+        )
+
+    def __add__(self, other: "MassMoments") -> "MassMoments":
+        return MassMoments(
+            self.mass + other.mass, self.first + other.first, self.second + other.second
+        )
+
+    def __sub__(self, other: "MassMoments") -> "MassMoments":
+        return MassMoments(
+            self.mass - other.mass, self.first - other.first, self.second - other.second
+        )
+
+    def center_and_inertia(self) -> tuple[Vector, Vector]:
+        center = self.first / self.mass
+        about_center = self.second - self.mass * numpy.outer(center, center)
+        return center, numpy.trace(about_center) * numpy.eye(3) - about_center
+
+
+def read_inertial(link: ElementTree.Element) -> MassMoments:
+    origin, mass, inertia = (
+        link.find(f"inertial/{name}") for name in ("origin", "mass", "inertia")
+    )
+    if origin is None or mass is None or inertia is None:
+        raise ValueError(f"Link {link.get('name')} has no inertial")
+    if any(float(value) != 0 for value in origin.attrib.get("rpy", "0 0 0").split()):
+        raise ValueError("Expected an inertial aligned with its link frame")
+    value = {key: float(number) for key, number in inertia.attrib.items()}
+    tensor = numpy.array(
+        [
+            [value["ixx"], value["ixy"], value["ixz"]],
+            [value["ixy"], value["iyy"], value["iyz"]],
+            [value["ixz"], value["iyz"], value["izz"]],
+        ]
+    )
+    center = numpy.array([float(number) for number in origin.attrib["xyz"].split()])
+    return MassMoments.from_center(float(mass.attrib["value"]), center, tensor)
+
+
+def write_inertial(link: ElementTree.Element, moments: MassMoments) -> None:
+    for existing in link.findall("inertial"):
+        link.remove(existing)
+    center, tensor = moments.center_and_inertia()
+    inertial = ElementTree.Element("inertial")
+    link.insert(0, inertial)
+    ElementTree.SubElement(
+        inertial,
+        "origin",
+        xyz=" ".join(f"{value:.9g}" for value in center),
+        rpy="0 0 0",
+    )
+    ElementTree.SubElement(inertial, "mass", value=f"{moments.mass:.9g}")
+    ElementTree.SubElement(
+        inertial,
+        "inertia",
+        {
+            name: f"{tensor[row, column]:.9g}"
+            for name, (row, column) in {
+                "ixx": (0, 0),
+                "ixy": (0, 1),
+                "ixz": (0, 2),
+                "iyy": (1, 1),
+                "iyz": (1, 2),
+                "izz": (2, 2),
+            }.items()
+        },
+    )
+
+
+def urdf_origin_transform(element: ElementTree.Element) -> Vector:
+    origin = element.find("origin")
+    transform = numpy.eye(4)
+    if origin is None:
+        return transform
+    roll, pitch, yaw = (float(value) for value in origin.get("rpy", "0 0 0").split())
+    transform = trimesh.transformations.euler_matrix(roll, pitch, yaw, "sxyz")
+    transform[:3, 3] = [float(value) for value in origin.get("xyz", "0 0 0").split()]
+    return transform
+
+
+def stock_part_moments(
+    link: ElementTree.Element, mesh_filename: str, density: float
+) -> MassMoments:
+    """Estimate a stock printed part in its link frame, as placed by its visual origin."""
+    for visual in link.findall("visual"):
+        mesh_element = visual.find("geometry/mesh")
+        if mesh_element is not None and mesh_element.get("filename") == mesh_filename:
+            mesh = trimesh.load_mesh(ASSET_DIRECTORY / mesh_filename)
+            mesh.apply_transform(urdf_origin_transform(visual))
+            return MassMoments.from_mesh(mesh, density)
+    raise ValueError(f"Link {link.get('name')} has no part {mesh_filename}")
+
+
+def box_moments(mass: float, size: Vector, transform: Vector) -> MassMoments:
+    """A uniform box centered on `transform`'s origin and aligned with its axes."""
+    width, height, depth = size
+    inertia_in_box = (
+        mass
+        / 12
+        * numpy.diag([height**2 + depth**2, width**2 + depth**2, width**2 + height**2])
+    )
+    rotation = transform[:3, :3]
+    return MassMoments.from_center(
+        mass, transform[:3, 3], rotation @ inertia_in_box @ rotation.T
+    )
+
+
 def add_mesh_geometry(link: ElementTree.Element, mesh_filename: str, kind: str) -> None:
     geometry = ElementTree.SubElement(ElementTree.SubElement(link, kind), "geometry")
     ElementTree.SubElement(geometry, "mesh", filename=mesh_filename)
@@ -107,8 +238,11 @@ def add_camera_module(
     board_width_mm: float,
     front_reserve_mm: float,
     rear_reserve_mm: float,
-) -> None:
-    """Place the nominal module envelope on the bracket's four mounting corners."""
+) -> tuple[Vector, Vector]:
+    """Place the nominal module envelope on the bracket's four mounting corners.
+
+    Returns the envelope's center frame in gripper_link and its size, in meters.
+    """
     screw_axes = []
     direction = None
     for face in mount.Faces():
@@ -186,6 +320,16 @@ def add_camera_module(
             for value in trimesh.transformations.euler_from_matrix(camera_transform)
         ),
     )
+    envelope_frame = camera_transform.copy()
+    envelope_frame[:3, 3] += camera_transform[:3, :3] @ [
+        0.0,
+        0.0,
+        (front_reserve_mm - rear_reserve_mm) * 0.0005,
+    ]
+    envelope_size = numpy.array(
+        [board_width_mm, board_width_mm, front_reserve_mm + rear_reserve_mm]
+    )
+    return envelope_frame, envelope_size * 0.001
 
 
 def carrier_reference_angle(
@@ -249,6 +393,20 @@ def build_model() -> None:
         SOURCE_DIRECTORY / source["file"], source["sha256"]
     )
     attachment = wrist_attachment_transform(body)
+    solids = {
+        "body": body,
+        "fixed_finger": fixed_finger,
+        "moving_carrier": carrier,
+        "moving_finger": moving_finger,
+        "camera_mount": camera_mount,
+    }
+    mass_estimate = manifest["mass_estimate"]
+    pla_density = (
+        mass_estimate["pla_density_kg_per_m3"] * mass_estimate["pla_effective_fill"]
+    )
+    tpu_density = (
+        mass_estimate["tpu_density_kg_per_m3"] * mass_estimate["tpu_effective_fill"]
+    )
     mesh_prefix = "soft-gripper-camera"
     meshes = {
         "body": triangle_mesh(body, attachment),
@@ -257,6 +415,10 @@ def build_model() -> None:
         "moving_finger": triangle_mesh(moving_finger, attachment),
         "camera_mount": triangle_mesh(camera_mount, attachment),
     }
+    for role, mesh in meshes.items():
+        solid_volume = solids[role].Volume() * 1e-9
+        if not math.isclose(mesh.volume, solid_volume, rel_tol=0.01):
+            raise ValueError(f"The {role} mesh does not enclose its CAD volume")
     robot = ElementTree.parse(ASSET_DIRECTORY / "robot.urdf").getroot()
     robot.set("name", "so101_soft_gripper_camera")
     gripper = robot.find("link[@name='gripper_link']")
@@ -264,6 +426,9 @@ def build_model() -> None:
     gripper_joint_origin = robot.find("joint[@name='gripper']/origin")
     if gripper is None or moving_jaw is None or gripper_joint_origin is None:
         raise ValueError("Stock model is missing its gripper joint frames")
+    gripper_moments = read_inertial(gripper) - stock_part_moments(
+        gripper, mass_estimate["replaced_stock_part"], pla_density
+    )
     for geometry_kind in ("visual", "collision"):
         for element in gripper.findall(geometry_kind):
             mesh_element = element.find("geometry/mesh")
@@ -284,11 +449,22 @@ def build_model() -> None:
         reference_angle, [0, 0, 1]
     )
     moving_to_joint = numpy.linalg.inv(joint_rotation @ reference_rotation)
+    part_density = {
+        "body": pla_density,
+        "fixed_finger": tpu_density,
+        "moving_carrier": pla_density,
+        "moving_finger": tpu_density,
+        "camera_mount": pla_density,
+    }
+    moving_moments = MassMoments(0.0, numpy.zeros(3), numpy.zeros((3, 3)))
     for role in ("moving_carrier", "moving_finger"):
         meshes[role].apply_transform(moving_to_joint)
+        moving_moments += MassMoments.from_mesh(meshes[role], part_density[role])
         filename = export_mesh(meshes[role], f"{mesh_prefix}/{role}.stl")
         add_mesh_geometry(moving_jaw, filename, "visual")
         add_mesh_geometry(moving_jaw, filename, "collision")
+    for role in ("body", "fixed_finger", "camera_mount"):
+        gripper_moments += MassMoments.from_mesh(meshes[role], part_density[role])
     for role in ("body", "fixed_finger"):
         filename = export_mesh(meshes[role], f"{mesh_prefix}/{role}.stl")
         add_mesh_geometry(gripper, filename, "visual")
@@ -300,7 +476,7 @@ def build_model() -> None:
         robot, "wrist_camera_mount_link", mount_filename, [mount_filename]
     )
     camera = manifest["camera"]
-    add_camera_module(
+    envelope_frame, envelope_size = add_camera_module(
         robot,
         camera_mount,
         attachment,
@@ -308,6 +484,11 @@ def build_model() -> None:
         camera["collision_front_reserve_mm"],
         camera["collision_rear_reserve_mm"],
     )
+    gripper_moments += box_moments(
+        mass_estimate["camera_module_mass_kg"], envelope_size, envelope_frame
+    )
+    write_inertial(gripper, gripper_moments)
+    write_inertial(moving_jaw, moving_moments)
     fixed_vertices = meshes["fixed_finger"].vertices
     moving_vertices = meshes["moving_finger"].vertices.copy()
     moving_vertices = trimesh.transformations.transform_points(
@@ -337,6 +518,10 @@ def build_model() -> None:
     print(f"Carrier reference angle: {reference_angle:.9f} rad")
     print(f"Nominal grasp point in gripper_link: {grasp_position} m")
     print("Camera and bracket collision envelopes included")
+    print(
+        f"Estimated masses: gripper_link {gripper_moments.mass:.4f} kg,"
+        f" moving jaw {moving_moments.mass:.4f} kg"
+    )
 
 
 if __name__ == "__main__":
