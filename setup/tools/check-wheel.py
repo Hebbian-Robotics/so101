@@ -107,12 +107,13 @@ assert (assets / 'robot/so101/LICENSE.txt').is_file()
         try:
             assert process.stdout is not None
             line = process.stdout.readline()
-            address = urlsplit(line.removeprefix("SO-101 calibration: ").strip())
+            launch_url = line.removeprefix("SO-101 calibration: ").strip()
+            address = urlsplit(launch_url)
             if address.hostname != "127.0.0.1" or address.port is None:
                 raise RuntimeError(f"Calibration CLI did not start: {line!r}")
             origin = f"http://127.0.0.1:{address.port}"
             browser = build_opener(HTTPCookieProcessor(CookieJar()))
-            with browser.open(origin + "/", timeout=5) as response:
+            with browser.open(launch_url, timeout=5) as response:
                 assert response.status == 200
                 assert response.read()
             for path in ("/robot/so101/LICENSE.txt", "/robot/so101/SOFT_GRIPPER_NOTICE.txt"):
