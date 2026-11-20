@@ -9,6 +9,7 @@ pub mod discovery;
 pub mod driver;
 mod numeric;
 pub mod registry;
+pub mod servo_registers;
 pub mod settings;
 pub mod setup;
 pub mod telemetry;

@@ -18,6 +18,42 @@ pub enum ModelVariant {
     SoftGripperCamera,
 }
 
+/// The six SO-101 servos by the joint they drive, the gripper last.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum So101Joint {
+    ShoulderPan,
+    ShoulderLift,
+    ElbowFlex,
+    WristFlex,
+    WristRoll,
+    Gripper,
+}
+
+impl So101Joint {
+    /// Every joint in the standard order, the gripper last.
+    pub const ALL: [Self; 6] = [
+        Self::ShoulderPan,
+        Self::ShoulderLift,
+        Self::ElbowFlex,
+        Self::WristFlex,
+        Self::WristRoll,
+        Self::Gripper,
+    ];
+
+    /// The joint's `LeRobot` name.
+    #[must_use]
+    pub const fn name(self) -> &'static str {
+        match self {
+            Self::ShoulderPan => "shoulder_pan",
+            Self::ShoulderLift => "shoulder_lift",
+            Self::ElbowFlex => "elbow_flex",
+            Self::WristFlex => "wrist_flex",
+            Self::WristRoll => "wrist_roll",
+            Self::Gripper => "gripper",
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct MotorIds {
@@ -85,6 +121,27 @@ impl MotorIds {
         [pan, lift, elbow, flex, roll, gripper]
     }
 
+    /// The motor id wired to a joint.
+    #[must_use]
+    pub fn motor_id(self, joint: So101Joint) -> u8 {
+        match joint {
+            So101Joint::ShoulderPan => self.shoulder_pan,
+            So101Joint::ShoulderLift => self.shoulder_lift,
+            So101Joint::ElbowFlex => self.elbow_flex,
+            So101Joint::WristFlex => self.wrist_flex,
+            So101Joint::WristRoll => self.wrist_roll,
+            So101Joint::Gripper => self.gripper,
+        }
+    }
+
+    /// The joint a motor id drives, if this mapping uses that id.
+    #[must_use]
+    pub fn joint(self, motor_id: u8) -> Option<So101Joint> {
+        So101Joint::ALL
+            .into_iter()
+            .find(|&joint| self.motor_id(joint) == motor_id)
+    }
+
     pub fn validate(self) -> anyhow::Result<()> {
         let mut ids = self.ordered();
         ids.sort_unstable();
@@ -108,8 +165,6 @@ pub struct ArmSetup {
     pub alignment: Alignment,
     #[serde(default)]
     pub gripper: GripperEndpoints,
-    #[serde(default)]
-    pub servos: ServoSettings,
 }
 
 #[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
@@ -148,27 +203,6 @@ impl Default for GripperEndpoints {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
-#[serde(default, deny_unknown_fields)]
-pub struct ServoSettings {
-    #[serde(rename = "expected_position_gains")]
-    pub position_gains: [i64; 3],
-    #[serde(default, rename = "expected_position_gains_by_motor")]
-    pub position_gains_by_motor: BTreeMap<String, [i64; 3]>,
-    #[serde(rename = "expected_return_delay_time")]
-    pub return_delay_time: Option<u8>,
-}
-
-impl Default for ServoSettings {
-    fn default() -> Self {
-        Self {
-            position_gains: [16, 0, 32],
-            position_gains_by_motor: BTreeMap::new(),
-            return_delay_time: Some(0),
-        }
-    }
-}
-
 impl ArmSetup {
     /// Read and validate a setup for the selected USB controller.
     pub fn load(path: &Path, serial: &str) -> anyhow::Result<Self> {
@@ -178,10 +212,23 @@ impl ArmSetup {
             "SO-101 calibration save did not finish. Inspect the backups named in {} and recalibrate.",
             pending.display()
         );
-        let setup: Self = toml::from_str(&std::fs::read_to_string(path)?)
-            .with_context(|| format!("Invalid SO-101 setup {}", path.display()))?;
+        let setup = Self::parse(&std::fs::read_to_string(path)?, path)?;
         setup.validate(serial)?;
         Ok(setup)
+    }
+
+    pub(crate) fn parse(text: &str, path: &Path) -> anyhow::Result<Self> {
+        let document: toml::Table = toml::from_str(text)
+            .with_context(|| format!("Invalid SO-101 setup {}", path.display()))?;
+        ensure!(
+            !document.contains_key("servos"),
+            "{} has a [servos] section, which is no longer supported: every arm runs the \
+             standard servo registers (hebbian_so101::servo_registers). Remove the section.",
+            path.display()
+        );
+        document
+            .try_into()
+            .with_context(|| format!("Invalid SO-101 setup {}", path.display()))
     }
 
     pub(crate) fn validate(&self, serial: &str) -> anyhow::Result<()> {
@@ -204,13 +251,6 @@ impl ArmSetup {
                     .abs()
                     > 0.0,
             "Invalid gripper endpoints"
-        );
-        ensure!(
-            self.servos
-                .position_gains_by_motor
-                .keys()
-                .all(|id| id.parse::<u8>().is_ok_and(|id| (1..=6).contains(&id))),
-            "Gain overrides must name an SO-101 motor (IDs 1-6)"
         );
         self.motor_ids.validate()?;
         Ok(())
@@ -244,5 +284,36 @@ impl MotorIds {
         );
         calibration_by_motor_id(entries.values().cloned(), motor_ids, path)?;
         Ok(entries)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::path::Path;
+
+    use super::{ArmSetup, MotorIds, So101Joint};
+
+    #[test]
+    fn a_setup_that_still_overrides_servo_registers_is_refused() {
+        let text = "serial = \"5CBC431221\"\n[servos]\nexpected_position_gains = [16, 0, 32]\n";
+        let refusal = ArmSetup::parse(text, Path::new("setup.toml"))
+            .err()
+            .map(|error| error.to_string());
+        assert!(refusal.is_some_and(|message| message.contains("[servos]")));
+    }
+
+    #[test]
+    fn motor_ids_resolve_to_joints_through_the_arms_wiring() -> anyhow::Result<()> {
+        let swapped_wrist_and_gripper = MotorIds::from_joint_order([1, 2, 3, 5, 6, 4])?;
+        assert_eq!(
+            swapped_wrist_and_gripper.joint(4),
+            Some(So101Joint::Gripper)
+        );
+        assert_eq!(
+            swapped_wrist_and_gripper.joint(5),
+            Some(So101Joint::WristFlex)
+        );
+        assert_eq!(swapped_wrist_and_gripper.joint(7), None);
+        Ok(())
     }
 }

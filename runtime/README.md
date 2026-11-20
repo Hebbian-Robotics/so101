@@ -21,7 +21,8 @@ request timing remain in this runtime.
 A consumer supplies `config::FeetechConfig`, including the arm's calibration,
 model alignment, expected gains, gripper force fraction and hardware health
 limits. `config::load_arm_config` can build it from `settings::FeetechSettings`
-and a `LeRobot` calibration directory. Both are independent data contracts,
+and a `LeRobot` calibration directory, taking the expected gains and return delay
+from `servo_registers`, the register settings every arm runs. Both are independent data contracts,
 retaining the existing serialized Feetech field names.
 
 ```rust,no_run

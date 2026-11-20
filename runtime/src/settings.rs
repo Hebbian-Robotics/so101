@@ -61,13 +61,6 @@ pub struct FeetechSettings {
     pub gripper_sign: Sign,
     #[serde(default)]
     pub gripper_offset_radians: f64,
-    pub expected_position_gains: [i64; 3],
-    /// Keyed by motor id, as TOML keys are strings.
-    #[serde(default)]
-    pub expected_position_gains_by_motor: BTreeMap<String, [i64; 3]>,
-    /// `Return_Delay_Time` every driven servo must already hold; unset skips the check.
-    #[serde(default)]
-    pub expected_return_delay_time: Option<u8>,
     pub max_temperature_celsius: f64,
     pub min_voltage_volts: f64,
     pub max_voltage_volts: f64,
@@ -103,21 +96,12 @@ impl FeetechSettings {
             .chain(self.gripper_motor_id)
             .collect()
     }
-
-    /// The gains a motor is expected to hold: its override, or the shared ones.
-    #[must_use]
-    pub fn expected_gains(&self, motor_id: u8) -> [i64; 3] {
-        self.expected_position_gains_by_motor
-            .get(&motor_id.to_string())
-            .copied()
-            .unwrap_or(self.expected_position_gains)
-    }
 }
 impl FeetechSettings {
     /// Validate the SO-101 wiring and model mapping against the enclosing profile.
     ///
     /// # Errors
-    /// Ports, motors, model coordinates, gripper or gain overrides are inconsistent.
+    /// Ports, motors, model coordinates or gripper are inconsistent.
     pub fn validate_profile_mapping(
         &self,
         arms: &[String],
@@ -153,13 +137,6 @@ impl FeetechSettings {
             ensure!(
                 !self.motor_ids.contains(&gripper) && !self.passive_motor_ids.contains(&gripper),
                 "The gripper motor cannot also be a joint or passive"
-            );
-        }
-        let driven = self.driven_motor_ids();
-        for motor in self.expected_position_gains_by_motor.keys() {
-            ensure!(
-                motor.parse::<u8>().is_ok_and(|id| driven.contains(&id)),
-                "Gain overrides must name a driven motor, not {motor}"
             );
         }
         ensure!(

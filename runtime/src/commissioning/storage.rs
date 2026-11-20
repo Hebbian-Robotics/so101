@@ -3,20 +3,22 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, ensure};
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
 use uuid::Uuid;
 
 use crate::calibration::so_follower_calibration_path;
 use crate::discovery::ControllerSerial;
+use crate::servo_registers::{
+    self, GRIPPER_MAX_TORQUE_LIMIT, GRIPPER_PROTECTION_CURRENT, MAXIMUM_ACCELERATION,
+    RETURN_DELAY_TIME,
+};
 use crate::setup::{
     Alignment, ArmSetup, GripperEndpoints, INCOMPLETE_CALIBRATION_FILE, ModelVariant, MotorIds,
-    ServoSettings,
+    So101Joint,
 };
 
 use super::draft::{CalibrationEntries, Draft};
 use super::hardware::{INCOMPLETE_RESET_FILE, SetupBus, read_arm, require_torque_off, write_new};
-
-const GAINS: [&str; 3] = ["p_coefficient", "i_coefficient", "d_coefficient"];
 
 const REGISTERS: &[&str] = &[
     "homing_offset",
@@ -50,24 +52,6 @@ pub struct SavedFiles {
     pub backup: PathBuf,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
-#[serde(default, deny_unknown_fields)]
-struct RegisterSettings {
-    maximum_acceleration: u8,
-    gripper_max_torque_limit: u16,
-    gripper_protection_current: u16,
-}
-
-impl Default for RegisterSettings {
-    fn default() -> Self {
-        Self {
-            maximum_acceleration: 254,
-            gripper_max_torque_limit: 500,
-            gripper_protection_current: 250,
-        }
-    }
-}
-
 impl ArmFiles {
     #[must_use]
     pub fn new(
@@ -94,16 +78,8 @@ impl ArmFiles {
     pub fn load(&self) -> Result<ArmSetup> {
         let path = self.directory.join("setup.toml");
         if path.try_exists()? {
-            let document: toml::Table = toml::from_str(&fs::read_to_string(&path)?)
-                .with_context(|| format!("Invalid {}", path.display()))?;
-            let configured_gains = document.contains_key("servos");
-            let mut setup: ArmSetup = document
-                .try_into()
-                .with_context(|| format!("Invalid {}", path.display()))?;
+            let setup = ArmSetup::parse(&fs::read_to_string(&path)?, &path)?;
             setup.validate(self.serial.as_str())?;
-            if !configured_gains {
-                setup.servos = default_commissioning_gains(setup.motor_ids);
-            }
             return Ok(setup);
         }
         ensure!(
@@ -116,7 +92,6 @@ impl ArmFiles {
             motor_ids: MotorIds::default(),
             alignment: Alignment::default(),
             gripper: GripperEndpoints::default(),
-            servos: default_commissioning_gains(MotorIds::default()),
         })
     }
 
@@ -159,21 +134,14 @@ impl ArmFiles {
             && self.load().is_ok_and(|saved| saved == *setup)
     }
 
-    fn register_settings(&self) -> Result<RegisterSettings> {
+    fn require_no_register_overrides(&self) -> Result<()> {
         let path = self.directory.join("servo-overrides.toml");
-        let settings: RegisterSettings = if path.try_exists()? {
-            toml::from_str(&fs::read_to_string(&path)?)
-                .with_context(|| format!("Invalid {}", path.display()))?
-        } else {
-            RegisterSettings::default()
-        };
         ensure!(
-            settings.maximum_acceleration <= 254
-                && settings.gripper_max_torque_limit <= 1000
-                && settings.gripper_protection_current <= 310,
-            "Servo register override is outside the supported range"
+            !path.try_exists()?,
+            "{} is no longer supported: every arm runs the standard servo registers. Remove it.",
+            path.display()
         );
-        Ok(settings)
+        Ok(())
     }
 
     pub(super) fn save(
@@ -207,7 +175,7 @@ impl ArmFiles {
                 vec![index]
             }
             SaveTarget::All => {
-                self.add_servo_updates(setup, &registers, &mut updates)?;
+                self.add_servo_updates(&registers, &mut updates)?;
                 (0..6).collect()
             }
         };
@@ -271,11 +239,10 @@ impl ArmFiles {
 
     fn add_servo_updates(
         &self,
-        setup: &ArmSetup,
         previous: &RegisterValues,
         updates: &mut RegisterValues,
     ) -> Result<()> {
-        let settings = self.register_settings()?;
+        self.require_no_register_overrides()?;
         let position_mode = rustypot::servo::feetech::sts3215::INFO
             .operating_modes
             .iter()
@@ -283,48 +250,28 @@ impl ArmFiles {
             .map(|(_, value)| i64::from(*value))
             .context("Missing STS3215 position mode")?;
         updates.insert("operating_mode", [position_mode; 6]);
-        if let Some(delay) = setup.servos.return_delay_time {
-            updates.insert("return_delay_time", [i64::from(delay); 6]);
-        }
-        updates.insert(
-            "maximum_acceleration",
-            [i64::from(settings.maximum_acceleration); 6],
-        );
+        updates.insert("return_delay_time", [i64::from(RETURN_DELAY_TIME); 6]);
+        updates.insert("maximum_acceleration", [i64::from(MAXIMUM_ACCELERATION); 6]);
+        let gripper_index = So101Joint::ALL.len() - 1;
         let mut max_torque = previous["max_torque_limit"];
-        max_torque[5] = i64::from(settings.gripper_max_torque_limit);
+        max_torque[gripper_index] = i64::from(GRIPPER_MAX_TORQUE_LIMIT);
         updates.insert("max_torque_limit", max_torque);
         let mut protection_current = previous["protection_current"];
-        protection_current[5] = i64::from(settings.gripper_protection_current);
+        protection_current[gripper_index] = i64::from(GRIPPER_PROTECTION_CURRENT);
         updates.insert("protection_current", protection_current);
 
-        let ordered = setup.motor_ids.ordered();
-        for (gain, name) in GAINS.into_iter().enumerate() {
-            let values = std::array::from_fn(|index| {
-                setup
-                    .servos
-                    .position_gains_by_motor
-                    .get(&ordered[index].to_string())
-                    .copied()
-                    .unwrap_or(setup.servos.position_gains)[gain]
-            });
-            ensure!(
-                values.iter().all(|value| (0..=255).contains(value)),
-                "Invalid {name} gain"
-            );
-            updates.insert(name, values);
-        }
+        // INVARIANT: Register arrays follow MotorIds::ordered(), which is So101Joint::ALL order.
+        let gains = So101Joint::ALL.map(servo_registers::position_gains);
+        updates.insert(
+            "p_coefficient",
+            gains.map(|gain| i64::from(gain.proportional)),
+        );
+        updates.insert("i_coefficient", gains.map(|gain| i64::from(gain.integral)));
+        updates.insert(
+            "d_coefficient",
+            gains.map(|gain| i64::from(gain.derivative)),
+        );
         Ok(())
-    }
-}
-
-fn default_commissioning_gains(mapping: MotorIds) -> ServoSettings {
-    let [_, shoulder_lift, elbow, ..] = mapping.ordered();
-    ServoSettings {
-        position_gains_by_motor: BTreeMap::from([
-            (shoulder_lift.to_string(), [32, 0, 32]),
-            (elbow.to_string(), [32, 0, 32]),
-        ]),
-        ..ServoSettings::default()
     }
 }
 
@@ -420,71 +367,4 @@ fn atomic_write(path: &Path, contents: &[u8]) -> Result<()> {
         let _ = fs::remove_file(temporary);
     }
     result
-}
-
-#[cfg(test)]
-mod servo_response_tests {
-    use std::collections::BTreeMap;
-
-    use serde::Deserialize;
-
-    use super::{RegisterSettings, default_commissioning_gains};
-    use crate::setup::MotorIds;
-
-    const JOINT_NAMES: [&str; 6] = [
-        "shoulder_pan",
-        "shoulder_lift",
-        "elbow_flex",
-        "wrist_flex",
-        "wrist_roll",
-        "gripper",
-    ];
-
-    #[derive(Deserialize)]
-    struct FittedRegisterSettings {
-        position_gains_p_i_d: [i64; 3],
-        position_gains_p_i_d_by_joint: BTreeMap<String, [i64; 3]>,
-        return_delay_time: u8,
-        maximum_acceleration: u8,
-    }
-
-    #[derive(Deserialize)]
-    struct ServoResponse {
-        register_settings: FittedRegisterSettings,
-    }
-
-    // WHY: The simulated servo response was fitted to arms running these settings; changing a
-    // commissioning default without refitting would leave simulation describing other servos.
-    #[test]
-    fn commissioning_defaults_match_the_settings_the_servo_response_was_fitted_under()
-    -> anyhow::Result<()> {
-        let response: ServoResponse = toml::from_str(include_str!(
-            "../../../models/soft-gripper-camera/servo_response.toml"
-        ))?;
-        let fitted = response.register_settings;
-        let commissioned = default_commissioning_gains(MotorIds::default());
-        let motor_ids = MotorIds::default().ordered();
-        for (joint, motor_id) in JOINT_NAMES.into_iter().zip(motor_ids) {
-            let commissioned_gains = commissioned
-                .position_gains_by_motor
-                .get(&motor_id.to_string())
-                .copied()
-                .unwrap_or(commissioned.position_gains);
-            let fitted_gains = fitted
-                .position_gains_p_i_d_by_joint
-                .get(joint)
-                .copied()
-                .unwrap_or(fitted.position_gains_p_i_d);
-            assert_eq!(commissioned_gains, fitted_gains, "{joint} position gains");
-        }
-        assert_eq!(
-            commissioned.return_delay_time,
-            Some(fitted.return_delay_time)
-        );
-        assert_eq!(
-            RegisterSettings::default().maximum_acceleration,
-            fitted.maximum_acceleration
-        );
-        Ok(())
-    }
 }

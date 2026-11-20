@@ -1,12 +1,11 @@
 # How the arm's STS3215 servos respond under the register settings below, for simulation
 # (build_mjcf.py writes these into robot-soft-gripper-camera.xml). The response is fitted to
 # real arm traces, so it holds only for these settings: the runtime's tests fail when the
-# commissioning defaults change, and the fit must then be redone.
+# standard register settings change, and the fit must then be redone.
 schema_version = 1
 
-# The register settings commissioning writes to every arm (runtime/src/commissioning/storage.rs
-# default_commissioning_gains and RegisterSettings, runtime/src/setup.rs ServoSettings). They are
-# the same on every arm; only the position gain differs by joint.
+# The register settings every arm runs (runtime/src/servo_registers.rs, which commissioning writes
+# and the driver's preflight verifies); only the position gain differs by joint.
 [register_settings]
 position_gains_p_i_d = [16, 0, 32]
 position_gains_p_i_d_by_joint = { shoulder_lift = [32, 0, 32], elbow_flex = [32, 0, 32] }

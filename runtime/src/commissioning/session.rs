@@ -368,13 +368,6 @@ impl<Bus: SetupBus> Session<Bus> {
         self.moving_until = order.map(|index| self.moving_until[index]);
         self.snapshot = snapshot;
         self.setup.motor_ids = mapping;
-        let gains = &mut self.setup.servos.position_gains_by_motor;
-        let original = std::mem::take(gains);
-        for (old, new) in old_ids.into_iter().zip(new_ids) {
-            if let Some(gain) = original.get(&old.to_string()) {
-                gains.insert(new.to_string(), *gain);
-            }
-        }
         Ok(())
     }
 

@@ -81,15 +81,14 @@ See [coordinate conventions](src/so101_setup/COORDINATES.md),
 Use an external control application for powered operation. This workflow still
 requires validation on the particular physical arm.
 
-A full calibration save sets maximum acceleration to 254 on all six motors,
-gripper maximum torque to 500, and gripper protection current to 250. These are
-raw register values. A single-joint recalibration leaves them alone.
-
-For an arm that needs different values, manually add `servo-overrides.toml`
-beside its `setup.toml`. Set only the keys it needs:
-`maximum_acceleration`, `gripper_max_torque_limit`, or
-`gripper_protection_current`. The tool applies them on the next full save.
-New arm setups do not create this file.
+A full calibration save writes the standard servo registers that every arm
+runs, defined once in the runtime's `servo_registers` module: position gains
+(P/I/D 32/0/32 on the shoulder lift and elbow, 16/0/32 elsewhere), return delay
+0 and maximum acceleration 254 on all six motors, and gripper maximum torque 500
+and protection current 250. These are raw register values. A single-joint
+recalibration leaves them alone. Per-arm overrides are not supported: a
+`setup.toml` with a `[servos]` section or a `servo-overrides.toml` beside it is
+refused. The legacy Python setup still carries its own copy of these values.
 
 ## Reset servo parameters
 

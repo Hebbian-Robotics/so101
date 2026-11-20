@@ -1,7 +1,9 @@
 //! Per-arm hardware configuration, independent of station policy.
 
 use crate::calibration::{LerobotMotorCalibration, load_calibration, validate_encoder_calibration};
+use crate::servo_registers::{self, RETURN_DELAY_TIME};
 use crate::settings::{FeetechSettings, Sign};
+use crate::setup::So101Joint;
 use anyhow::Context;
 use serde::{Deserialize, Serialize};
 use std::path::Path;
@@ -71,14 +73,14 @@ pub struct FeetechConfig {
 }
 
 fn feetech_motor(
-    settings: &FeetechSettings,
     calibration: &std::collections::BTreeMap<u8, LerobotMotorCalibration>,
+    joint: So101Joint,
     motor_id: u8,
     sign: Sign,
     offset_radians: f64,
 ) -> FeetechMotor {
     let entry = &calibration[&motor_id];
-    let [p, i, d] = settings.expected_gains(motor_id);
+    let gains = servo_registers::position_gains(joint);
     FeetechMotor {
         id: motor_id,
         sign: sign.as_integer(),
@@ -88,7 +90,11 @@ fn feetech_motor(
             range_min: entry.range_min,
             range_max: entry.range_max,
         },
-        expected_gains: Gains { p, i, d },
+        expected_gains: Gains {
+            p: i64::from(gains.proportional),
+            i: i64::from(gains.integral),
+            d: i64::from(gains.derivative),
+        },
     }
 }
 
@@ -107,21 +113,26 @@ pub fn load_arm_config(
         settings.motor_ids.len(),
         gripper_force_fraction.is_some(),
     )?;
+    anyhow::ensure!(
+        settings.motor_ids.len() == crate::SO101_JOINT_NAMES.len(),
+        "An SO-101 has {} joint motors",
+        crate::SO101_JOINT_NAMES.len()
+    );
     let calibration = load_calibration(settings, arm, calibration_root)?;
-    let joints = settings
-        .motor_ids
-        .iter()
+    let joints = So101Joint::ALL
+        .into_iter()
+        .zip(&settings.motor_ids)
         .zip(&settings.joint_signs)
         .zip(&settings.joint_offsets_radians)
-        .map(|((motor_id, sign), offset)| {
-            feetech_motor(settings, &calibration, *motor_id, *sign, *offset)
+        .map(|(((joint, motor_id), sign), offset)| {
+            feetech_motor(&calibration, joint, *motor_id, *sign, *offset)
         })
         .collect();
     let gripper = match (settings.gripper_motor_id, gripper_force_fraction) {
         (Some(motor_id), Some(force_fraction)) => Some(FeetechGripper {
             motor: feetech_motor(
-                settings,
                 &calibration,
+                So101Joint::Gripper,
                 motor_id,
                 settings.gripper_sign,
                 settings.gripper_offset_radians,
@@ -139,7 +150,7 @@ pub fn load_arm_config(
         joints,
         gripper,
         passive_motor_ids: settings.passive_motor_ids.clone(),
-        expected_return_delay_time: settings.expected_return_delay_time.map(i64::from),
+        expected_return_delay_time: Some(i64::from(RETURN_DELAY_TIME)),
         max_temperature_celsius: settings.max_temperature_celsius,
         min_voltage_volts: settings.min_voltage_volts,
         max_voltage_volts: settings.max_voltage_volts,
