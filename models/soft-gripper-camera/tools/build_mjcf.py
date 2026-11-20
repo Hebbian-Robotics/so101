@@ -24,7 +24,7 @@ MAXIMUM_HULL_VERTICES = 128
 
 
 def build_mjcf() -> None:
-    manifest = tomllib.loads((ASSET_DIRECTORY / "model.toml").read_text())
+    manifest = tomllib.loads((ASSET_DIRECTORY / "robot-assemblies.toml").read_text())
     assembly = manifest["variants"]["soft-gripper-camera"]
     urdf = ElementTree.parse(ASSET_DIRECTORY / assembly["urdf"]).getroot()
     # WHY: Keep the meshes' subdirectories and every link as its own body, so the model's

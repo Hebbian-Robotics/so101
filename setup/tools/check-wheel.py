@@ -120,7 +120,7 @@ assert (assets / 'robot/so101/LICENSE.txt').is_file()
                     assert response.status == 200
                     assert response.read()
             model_url = f"{origin}/robot/so101"
-            with urlopen(f"{model_url}/model.toml", timeout=5) as response:
+            with urlopen(f"{model_url}/robot-assemblies.toml", timeout=5) as response:
                 manifest = tomllib.loads(response.read().decode())
             assert set(manifest["variants"]) == {"stock", "soft-gripper-camera"}
             for assembly in manifest["variants"].values():

@@ -12,7 +12,7 @@ Sign = Literal[-1, 1]
 ByteRegisterValue = Annotated[int, Field(ge=0, le=255, strict=True)]
 PositionGains = Annotated[list[ByteRegisterValue], Field(min_length=3, max_length=3)]
 _MODEL_MANIFEST = tomllib.loads(
-    Path(__file__).with_name("assets").joinpath("robot/so101/model.toml").read_text()
+    Path(__file__).with_name("assets").joinpath("robot/so101/robot-assemblies.toml").read_text()
 )
 SO101_JOINT_NAMES: list[str] = _MODEL_MANIFEST["joint_names"]
 MOTOR_IDS = [1, 2, 3, 4, 5, 6]
