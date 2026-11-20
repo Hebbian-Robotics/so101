@@ -1,11 +1,13 @@
 import { useMachine } from "@xstate/react";
 import { RefreshCw } from "lucide-react";
+import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import {
   NativeSelect,
   NativeSelectOption,
 } from "@/components/ui/native-select";
+import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 import {
   type FollowerMotor,
   getWizardSelection,
@@ -37,26 +39,27 @@ export function MotorIds() {
   return (
     <div className="workspace motor-workspace">
       <section className="instructions" aria-label="Program a motor">
-        <fieldset disabled={busy}>
-          <legend>Job</legend>
-          <label>
-            <input
-              type="radio"
-              name="job"
-              checked={mode === "batch"}
-              onChange={() => send({ type: "selectMode", mode: "batch" })}
-            />
-            New follower batch
-          </label>
-          <label>
-            <input
-              type="radio"
-              name="job"
-              checked={mode === "single"}
-              onChange={() => send({ type: "selectMode", mode: "single" })}
-            />
-            Program one ID
-          </label>
+        <fieldset className="min-w-0 rounded-lg border border-border px-3 pt-1 pb-2.5">
+          <legend id="motor-programming-job">Job</legend>
+          <RadioGroup
+            aria-labelledby="motor-programming-job"
+            className="flex flex-wrap gap-x-4 gap-y-2"
+            disabled={busy}
+            name="job"
+            value={mode}
+            onValueChange={(mode) => send({ type: "selectMode", mode })}
+          >
+            <div className="flex items-center gap-2">
+              <RadioGroupItem id="motor-programming-batch" value="batch" />
+              <label htmlFor="motor-programming-batch">
+                New follower batch
+              </label>
+            </div>
+            <div className="flex items-center gap-2">
+              <RadioGroupItem id="motor-programming-single" value="single" />
+              <label htmlFor="motor-programming-single">Program one ID</label>
+            </div>
+          </RadioGroup>
         </fieldset>
         {mode === "batch" && options && batchCount === options.motors.length ? (
           <>
@@ -160,10 +163,9 @@ export function MotorIds() {
                     disabled={busy || !port}
                     onCheckedChange={(checked) =>
                       send({
-                        type:
-                          checked === true
-                            ? "confirmIsolation"
-                            : "withdrawConfirmation",
+                        type: checked
+                          ? "confirmIsolation"
+                          : "withdrawConfirmation",
                       })
                     }
                   />
@@ -213,9 +215,9 @@ export function MotorIds() {
           </>
         )}
         {error && (
-          <p role="alert" className="error">
-            {error}
-          </p>
+          <Alert variant="destructive" className="my-3">
+            <AlertDescription>{error}</AlertDescription>
+          </Alert>
         )}
       </section>
       <section className="visual-feedback">

@@ -3,6 +3,7 @@ import { lazy, Suspense, useEffect, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
 import { match } from "ts-pattern";
 import { z } from "zod";
+import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import {
@@ -270,25 +271,23 @@ function App() {
         <nav className="setup-navigation" aria-label="SO-101 setup">
           <SidebarMenu>
             <SidebarMenuItem>
-              <SidebarMenuButton asChild isActive={!programmingMotorIds}>
-                <a
-                  href="/"
-                  aria-current={programmingMotorIds ? undefined : "page"}
-                >
-                  <SlidersHorizontal aria-hidden="true" />
-                  Calibrate arm
-                </a>
+              <SidebarMenuButton
+                render={<a href="/" />}
+                aria-current={programmingMotorIds ? undefined : "page"}
+                isActive={!programmingMotorIds}
+              >
+                <SlidersHorizontal aria-hidden="true" />
+                Calibrate arm
               </SidebarMenuButton>
             </SidebarMenuItem>
             <SidebarMenuItem>
-              <SidebarMenuButton asChild isActive={programmingMotorIds}>
-                <a
-                  href="/motor-ids"
-                  aria-current={programmingMotorIds ? "page" : undefined}
-                >
-                  <Cpu aria-hidden="true" />
-                  Program motor IDs
-                </a>
+              <SidebarMenuButton
+                render={<a href="/motor-ids" />}
+                aria-current={programmingMotorIds ? "page" : undefined}
+                isActive={programmingMotorIds}
+              >
+                <Cpu aria-hidden="true" />
+                Program motor IDs
               </SidebarMenuButton>
             </SidebarMenuItem>
           </SidebarMenu>
@@ -355,14 +354,14 @@ function App() {
                 )}
               </ol>
               {connectionError ? (
-                <p role="alert" className="error">
-                  {connectionError}
-                </p>
+                <Alert variant="destructive" className="my-3">
+                  <AlertDescription>{connectionError}</AlertDescription>
+                </Alert>
               ) : null}
               {actionError ? (
-                <p role="alert" className="error">
-                  {actionError}
-                </p>
+                <Alert variant="destructive" className="my-3">
+                  <AlertDescription>{actionError}</AlertDescription>
+                </Alert>
               ) : null}
               {match({
                 stage,
@@ -414,10 +413,12 @@ function App() {
                       will apply the new calibration and shared servo settings.
                     </p>
                     {view?.servo_reset_incomplete ? (
-                      <p role="alert">
-                        The previous reset was incomplete. Retry before
-                        calibrating.
-                      </p>
+                      <Alert variant="destructive" className="my-3">
+                        <AlertDescription>
+                          The previous reset was incomplete. Retry before
+                          calibrating.
+                        </AlertDescription>
+                      </Alert>
                     ) : (
                       <Button
                         variant="outline"
@@ -647,9 +648,7 @@ function App() {
                         checked={verified}
                         disabled={disabled || showReference}
                         onCheckedChange={(checked) =>
-                          setVerifiedRevision(
-                            checked === true ? reviewRevision : null,
-                          )
+                          setVerifiedRevision(checked ? reviewRevision : null)
                         }
                       />
                       The model follows this physical arm correctly.
@@ -769,9 +768,9 @@ function App() {
                 .with({ stage: "error" }, () => (
                   <>
                     <h2>Inspect the arm before continuing</h2>
-                    <p role="alert" className="error">
-                      {view?.message}
-                    </p>
+                    <Alert variant="destructive" className="my-3">
+                      <AlertDescription>{view?.message}</AlertDescription>
+                    </Alert>
                   </>
                 ))
                 .exhaustive()}

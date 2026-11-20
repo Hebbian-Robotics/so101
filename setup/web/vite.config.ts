@@ -21,7 +21,7 @@ export default defineConfig({
         if (
           log.code === "MODULE_LEVEL_DIRECTIVE" &&
           log.message.includes('"use client"') &&
-          /node_modules\/(?:@radix-ui\/|lucide-react\/)/.test(
+          /node_modules\/(?:@base-ui\/|lucide-react\/)/.test(
             log.id ?? log.loc?.file ?? log.message,
           )
         )

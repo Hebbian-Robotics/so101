@@ -198,7 +198,7 @@ p {
   background: var(--hover);
 }
 
-.setup-navigation [data-active="true"] {
+.setup-navigation [data-active] {
   color: var(--accent);
   background: var(--panel);
   border-inline-start-color: var(--accent);
@@ -344,15 +344,6 @@ a:focus-visible {
   border-block-start: 1px solid var(--border);
 }
 
-.error {
-  padding: 10px 12px;
-  border-inline-start: 3px solid var(--error-border);
-  border-radius: 3px;
-  color: var(--error-text);
-  background: var(--error-background);
-  overflow-wrap: anywhere;
-}
-
 .verification,
 .motor-confirmation {
   display: flex;
@@ -366,13 +357,6 @@ a:focus-visible {
   margin-block-start: 4px;
 }
 
-input[type="radio"] {
-  accent-color: var(--accent);
-  flex-shrink: 0;
-  inline-size: 17px;
-  block-size: 17px;
-  margin: 3px 0 0;
-}
 .secondary-actions {
   display: flex;
   flex-wrap: wrap;
@@ -470,23 +454,6 @@ pre {
 
 .motor-workspace {
   grid-template-columns: minmax(19rem, 1fr) minmax(0, 1.2fr);
-}
-
-.motor-workspace fieldset {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px 16px;
-  min-inline-size: 0;
-  margin: 0;
-  padding: 5px 12px 10px;
-  border: 1px solid var(--border);
-  border-radius: 8px;
-}
-
-.motor-workspace fieldset label {
-  display: flex;
-  align-items: flex-start;
-  gap: 6px;
 }
 
 .motor-field {
@@ -607,7 +574,7 @@ pre {
     font-size: 13px;
   }
 
-  .setup-navigation [data-active="true"] {
+  .setup-navigation [data-active] {
     border-block-end-color: var(--accent);
   }
 }

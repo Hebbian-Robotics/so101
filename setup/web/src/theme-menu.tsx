@@ -1,4 +1,5 @@
 import { ChevronDown, Monitor, Moon, Sun } from "lucide-react";
+import { useId } from "react";
 import { Button } from "@/components/ui/button";
 import {
   DropdownMenu,
@@ -30,24 +31,30 @@ export function ThemeMenu({
   onThemeChange: (theme: ThemePreference) => void;
 }) {
   const { Icon } = themeOptions[theme];
+  const tooltipId = useId();
   return (
-    <TooltipProvider delayDuration={400}>
+    <TooltipProvider delay={400}>
       <DropdownMenu modal={false}>
         <Tooltip>
-          <TooltipTrigger asChild>
-            <DropdownMenuTrigger asChild>
-              <Button
-                className="theme-trigger h-11 min-w-11 gap-1 px-2 text-muted-foreground"
-                type="button"
-                variant="ghost"
-                aria-label={`Theme: ${themeOptions[theme].label}`}
-              >
-                <Icon aria-hidden="true" />
-                <ChevronDown className="size-3" aria-hidden="true" />
-              </Button>
-            </DropdownMenuTrigger>
+          <TooltipTrigger
+            render={
+              <DropdownMenuTrigger
+                render={
+                  <Button
+                    className="theme-trigger h-11 min-w-11 gap-1 px-2 text-muted-foreground"
+                    type="button"
+                    variant="ghost"
+                    aria-label={`Theme: ${themeOptions[theme].label}`}
+                    aria-describedby={tooltipId}
+                  />
+                }
+              />
+            }
+          >
+            <Icon aria-hidden="true" />
+            <ChevronDown className="size-3" aria-hidden="true" />
           </TooltipTrigger>
-          <TooltipContent sideOffset={8} collisionPadding={12}>
+          <TooltipContent id={tooltipId} sideOffset={8} collisionPadding={12}>
             Change theme
           </TooltipContent>
         </Tooltip>
@@ -57,15 +64,27 @@ export function ThemeMenu({
           sideOffset={8}
           collisionPadding={12}
         >
-          <DropdownMenuRadioGroup value={theme} aria-label="Color theme">
+          <DropdownMenuRadioGroup
+            aria-label="Color theme"
+            value={theme}
+            onValueChange={(preference: unknown) => {
+              if (
+                preference === "system" ||
+                preference === "light" ||
+                preference === "dark"
+              ) {
+                onThemeChange(preference);
+              }
+            }}
+          >
             {(["system", "light", "dark"] as const).map((preference) => {
               const { Icon, label } = themeOptions[preference];
               return (
                 <DropdownMenuRadioItem
                   className="min-h-10"
+                  closeOnClick
                   key={preference}
                   value={preference}
-                  onSelect={() => onThemeChange(preference)}
                 >
                   <Icon aria-hidden="true" />
                   {label}
