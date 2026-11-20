@@ -10,11 +10,29 @@ import os
 import subprocess
 import sys
 import tempfile
+import tomllib
 from http.cookiejar import CookieJar
 from pathlib import Path
 from urllib.parse import urlsplit
 from urllib.request import HTTPCookieProcessor, build_opener, urlopen
 from xml.etree import ElementTree
+
+
+def tool_joint_chain(robot: ElementTree.Element, tool_frame: str) -> list[str]:
+    joints_by_child = {}
+    for joint in robot.findall("joint"):
+        child = joint.find("child")
+        assert child is not None
+        joints_by_child[child.attrib["link"]] = joint
+    chain = []
+    while tool_frame in joints_by_child:
+        joint = joints_by_child.pop(tool_frame)
+        if joint.attrib["type"] != "fixed":
+            chain.append(joint.attrib["name"])
+        parent = joint.find("parent")
+        assert parent is not None
+        tool_frame = parent.attrib["link"]
+    return chain[::-1]
 
 
 def main() -> None:
@@ -101,13 +119,29 @@ assert (assets / 'robot/so101/LICENSE.txt').is_file()
                 with urlopen(origin + path, timeout=5) as response:
                     assert response.status == 200
                     assert response.read()
-            for model in ("robot.urdf", "robot-soft-gripper-camera.urdf"):
-                with urlopen(f"{origin}/robot/so101/{model}", timeout=5) as response:
+            model_url = f"{origin}/robot/so101"
+            with urlopen(f"{model_url}/model.toml", timeout=5) as response:
+                manifest = tomllib.loads(response.read().decode())
+            assert set(manifest["variants"]) == {"stock", "soft-gripper-camera"}
+            for assembly in manifest["variants"].values():
+                urdf_name = assembly["urdf"]
+                with urlopen(f"{model_url}/{urdf_name}", timeout=5) as response:
                     robot = ElementTree.fromstring(response.read())
+                links = {link.attrib["name"] for link in robot.findall("link")}
+                assert manifest["tool_frame"] in links, urdf_name
+                assert tool_joint_chain(robot, manifest["tool_frame"]) == manifest["joint_names"]
+                assert manifest["gripper_joint"] in {
+                    joint.attrib["name"] for joint in robot.findall("joint")
+                }, urdf_name
+                if camera_board_frame := assembly.get("camera_board_frame"):
+                    assert camera_board_frame in links, urdf_name
+                if mjcf_name := assembly.get("mjcf"):
+                    with urlopen(f"{model_url}/{mjcf_name}", timeout=5) as response:
+                        assert ElementTree.fromstring(response.read()).tag == "mujoco"
                 mesh_paths = {mesh.attrib["filename"] for mesh in robot.iter("mesh")}
-                assert mesh_paths, model
+                assert mesh_paths, urdf_name
                 for mesh_path in mesh_paths:
-                    with urlopen(f"{origin}/robot/so101/{mesh_path}", timeout=5) as response:
+                    with urlopen(f"{model_url}/{mesh_path}", timeout=5) as response:
                         assert response.status == 200, mesh_path
                         assert response.read(), mesh_path
             with browser.open(origin + "/api/state", timeout=5) as response:

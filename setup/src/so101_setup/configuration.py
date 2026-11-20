@@ -1,5 +1,7 @@
 """The standalone setup contract; control-loop and station settings stay outside."""
 
+import tomllib
+from pathlib import Path
 from typing import Annotated, Literal, Self
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
@@ -9,17 +11,14 @@ FiniteFloat = Annotated[float, Field(allow_inf_nan=False)]
 Sign = Literal[-1, 1]
 ByteRegisterValue = Annotated[int, Field(ge=0, le=255, strict=True)]
 PositionGains = Annotated[list[ByteRegisterValue], Field(min_length=3, max_length=3)]
-SO101_JOINT_NAMES = [
-    "shoulder_pan",
-    "shoulder_lift",
-    "elbow_flex",
-    "wrist_flex",
-    "wrist_roll",
-]
+_MODEL_MANIFEST = tomllib.loads(
+    Path(__file__).with_name("assets").joinpath("robot/so101/model.toml").read_text()
+)
+SO101_JOINT_NAMES: list[str] = _MODEL_MANIFEST["joint_names"]
 MOTOR_IDS = [1, 2, 3, 4, 5, 6]
 ModelVariant = Literal["stock", "soft-gripper-camera"]
 DEFAULT_NEW_ARM_MODEL: ModelVariant = "soft-gripper-camera"
-MOTOR_NAMES = (*SO101_JOINT_NAMES, "gripper")
+MOTOR_NAMES: tuple[str, ...] = (*SO101_JOINT_NAMES, _MODEL_MANIFEST["gripper_joint"])
 MotorIds = dict[str, Annotated[int, Field(strict=True, ge=1, le=6)]]
 
 

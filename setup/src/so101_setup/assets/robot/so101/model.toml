@@ -1,0 +1,12 @@
+joint_names = ["shoulder_pan", "shoulder_lift", "elbow_flex", "wrist_flex", "wrist_roll"]
+gripper_joint = "gripper"
+tool_frame = "gripper_frame_link"
+jaw_closing_axis = "x"
+
+[variants.stock]
+urdf = "robot.urdf"
+
+[variants.soft-gripper-camera]
+urdf = "robot-soft-gripper-camera.urdf"
+mjcf = "robot-soft-gripper-camera.xml"
+camera_board_frame = "wrist_camera_board_link"
