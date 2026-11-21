@@ -20,23 +20,30 @@
   --color-popover: var(--panel);
   --color-popover-foreground: var(--text);
   --color-primary: var(--accent);
+  --color-primary-hover: var(--accent-hover);
   --color-primary-foreground: var(--accent-text);
   --color-secondary: var(--subtle);
   --color-secondary-foreground: var(--text);
   --color-accent: var(--selected);
-  --color-accent-foreground: var(--accent);
+  --color-accent-foreground: var(--selected-text);
   --color-muted: var(--subtle);
   --color-muted-foreground: var(--muted);
   --color-border: var(--border);
   --color-input: var(--control-border);
+  --color-field: var(--field);
+  --color-disabled: var(--disabled-fill);
+  --color-disabled-foreground: var(--disabled-text);
+  --color-scrim: var(--scrim);
   --color-ring: var(--focus);
   --color-sidebar: var(--background);
   --color-sidebar-foreground: var(--text);
-  --color-sidebar-accent: var(--hover);
+  --color-sidebar-accent: var(--selected);
   --color-sidebar-accent-foreground: var(--text);
   --color-sidebar-ring: var(--focus);
   --color-sidebar-border: var(--border);
-  --color-destructive: var(--error-border);
+  --color-destructive: var(--error-text);
+  --color-destructive-soft: var(--error-background);
+  --color-destructive-soft-hover: var(--error-hover);
 }
 
 @layer base {
@@ -47,38 +54,50 @@
 
 :root {
   color-scheme: light dark;
-  --text: #242424;
-  --muted: #686868;
-  --background: #f3f3f3;
-  --panel: #ffffff;
-  --subtle: #f5f5f5;
-  --border: #dedede;
-  --control-border: #a9a9a9;
-  --hover: #ededed;
-  --accent: #353535;
-  --accent-text: #ffffff;
-  --selected: #e8e8e8;
-  --focus: #353535;
-  --error-text: #962d2d;
-  --error-background: #fff0ed;
-  --error-border: #b43b32;
+  --text: #383530;
+  --muted: #59554e;
+  --background: #f4f3f0;
+  --panel: #fbfaf8;
+  --subtle: #f0eeea;
+  --field: #fdfcfb;
+  --border: #dedbd5;
+  --control-border: #85817a;
+  --accent: #625e57;
+  --accent-hover: #56534e;
+  --accent-text: #faf9f7;
+  --selected: #e8e6e1;
+  --selected-text: #48443d;
+  --focus: #58544c;
+  --disabled-fill: #edeae5;
+  --disabled-text: #665f55;
+  --scrim: #29252052;
+  --error-text: #ae263b;
+  --error-background: #f8e5e8;
+  --error-hover: #f1d5db;
+  --scene-background: #f4f2ee;
 
   @variant dark {
-    --text: #eeeeee;
+    --text: #dfdfdf;
     --muted: #b0b0b0;
-    --background: #171717;
-    --panel: #242424;
-    --subtle: #2c2c2c;
-    --border: #424242;
-    --control-border: #767676;
-    --hover: #383838;
-    --accent: #eeeeee;
-    --accent-text: #242424;
-    --selected: #383838;
-    --focus: #eeeeee;
-    --error-text: #ffd0c8;
-    --error-background: #4a2626;
-    --error-border: #f08e7e;
+    --background: #1c1c1c;
+    --panel: #282828;
+    --subtle: #343434;
+    --field: #222222;
+    --border: #454545;
+    --control-border: #7e7e7e;
+    --accent: #c7c7c7;
+    --accent-hover: #d9d9d9;
+    --accent-text: #252525;
+    --selected: #444444;
+    --selected-text: #d8d8d8;
+    --focus: #bdbdbd;
+    --disabled-fill: #353535;
+    --disabled-text: #a3a3a3;
+    --scrim: #141414b3;
+    --error-text: #ff8b9a;
+    --error-background: #3d2c2e;
+    --error-hover: #493337;
+    --scene-background: #222222;
   }
 
   font-family: "Avenir Next", Avenir, "Segoe UI", system-ui, sans-serif;
@@ -250,7 +269,7 @@ a:focus-visible {
   overflow: hidden;
   border: 1px solid var(--border);
   border-radius: 8px;
-  background: var(--subtle);
+  background: var(--scene-background);
 }
 
 .robot-scene-canvas > p {
@@ -285,7 +304,6 @@ pre {
 }
 
 @media (prefers-reduced-motion: reduce) {
-  [data-slot="dropdown-menu-content"],
   [data-slot="tooltip-content"] {
     animation: none;
   }

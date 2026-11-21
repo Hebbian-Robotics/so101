@@ -117,20 +117,17 @@ export function RobotScene(props: SceneProps) {
             <Canvas
               frameloop="demand"
               camera={{ fov: 40, near: 0.01, far: 30 }}
+              role="group"
               aria-label="Robot model: drag to orbit, scroll to zoom"
             >
-              <color
-                attach="background"
-                args={[props.darkMode ? "#242424" : "#eeeeee"]}
-              />
               <hemisphereLight args={[0xffffff, 0x888888, 1.5]} />
               <directionalLight position={[2, -3, 4]} intensity={1.5} />
               <gridHelper
                 args={[
                   2,
                   20,
-                  props.darkMode ? 0x777777 : 0xaaaaaa,
-                  props.darkMode ? 0x424242 : 0xd8d8d8,
+                  props.darkMode ? 0x707070 : 0xbcb8af,
+                  props.darkMode ? 0x484848 : 0xdfdcd5,
                 ]}
                 rotation={[Math.PI / 2, 0, 0]}
               />
