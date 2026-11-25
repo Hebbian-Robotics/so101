@@ -168,7 +168,7 @@ pub fn restore_servos(path: &str, ids: &[u8], backup_directory: &Path) -> Result
                 .all(|(index, id)| { ARM_IDS.contains(id) && !ids[..index].contains(id) }),
         "Select one or more motor IDs in 1–6"
     );
-    let (mut bus, mut serial) = SerialBus::open_with_raw(path, &ARM_IDS)?;
+    let mut bus = SerialBus::open(path, &ARM_IDS)?;
     require_original_ids(&mut bus)?;
     for &id in ids {
         let model = bus.read(&[id], "model_number")?;
@@ -187,7 +187,7 @@ pub fn restore_servos(path: &str, ids: &[u8], backup_directory: &Path) -> Result
     let backups = ids
         .iter()
         .map(|&id| {
-            restore_servo(&mut bus, serial.as_mut(), id, backup_directory)
+            restore_servo(&mut bus, id, backup_directory)
                 .with_context(|| format!("Reset stopped on motor {id}"))
         })
         .collect::<Result<_>>()?;
@@ -197,12 +197,7 @@ pub fn restore_servos(path: &str, ids: &[u8], backup_directory: &Path) -> Result
     Ok(backups)
 }
 
-fn restore_servo(
-    bus: &mut SerialBus,
-    serial: &mut dyn serialport::SerialPort,
-    id: u8,
-    backup_directory: &Path,
-) -> Result<PathBuf> {
+fn restore_servo(bus: &mut SerialBus, id: u8, backup_directory: &Path) -> Result<PathBuf> {
     require_original_ids(bus)?;
     let before = snapshot(bus, id)?;
     std::fs::create_dir_all(backup_directory)?;
@@ -215,23 +210,12 @@ fn restore_servo(
         }
         ensure!(bus.read(&[id], "lock")? == [0], "EEPROM did not unlock");
         require_original_ids(bus)?;
-        serial.set_timeout(Duration::from_millis(300))?;
-        serial.clear(serialport::ClearBuffer::Input)?;
-        // STS3215 parameter restore uses the protocol-v1 factory-reset
-        // instruction. Require the zero-status acknowledgement explicitly.
-        serial.write_all(&[0xff, 0xff, id, 2, 6, !(id + 8)])?;
-        serial.flush()?;
-        let mut reply = [0; 6];
-        serial.read_exact(&mut reply)?;
-        ensure!(
-            reply == [0xff, 0xff, id, 2, 0, !(id + 2)],
-            "Unexpected restore acknowledgement: {reply:02x?}"
-        );
-        Ok(())
+        bus.set_timeout(Duration::from_millis(300))?;
+        bus.reset_parameters_keep_id(id)
     })();
     std::thread::sleep(Duration::from_millis(500));
     let verify = (|| -> Result<()> {
-        serial.set_timeout(Duration::from_millis(50))?;
+        bus.set_timeout(Duration::from_millis(50))?;
         require_original_ids(bus)?;
         if bus.read(&[id], "lock")? != [previous_lock] {
             bus.write(id, "lock", previous_lock)?;
