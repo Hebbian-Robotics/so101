@@ -86,7 +86,9 @@ const fn register(name: &str) -> RegisterInfo {
 pub(super) const STATE_BLOCK_ADDRESS: u8 = register("present_position").addr;
 /// From `Present_Position` through `Status` inclusive: position, speed (not
 /// decoded: the loop estimates velocity from positions), load, voltage,
-/// temperature, the asynchronous-write flag, and status.
+/// temperature, the asynchronous-write flag, and status. Rustypot's named
+/// block read requires every byte to have a register name, and its STS3215
+/// table has no entry for the flag at address 64.
 pub(super) const STATE_BLOCK_LENGTH: u8 = {
     let status = register("status");
     status.addr + status.size - STATE_BLOCK_ADDRESS
@@ -189,14 +191,11 @@ impl Port {
     /// Open the port by its configured path. Startup and every reconnection open
     /// it here, so a reconnected bus is set up exactly as at startup.
     fn open(path: &str, motor_ids: &[u8]) -> anyhow::Result<Self> {
-        Ok(Self::from_serial(open_serial(path, TIMEOUT)?, motor_ids))
-    }
-
-    fn from_serial(serial: Box<dyn serialport::SerialPort>, motor_ids: &[u8]) -> Self {
+        let serial = open_serial(path, TIMEOUT)?;
         let motors: BTreeMap<u8, _> = motor_ids.iter().map(|id| (*id, DEFINITION)).collect();
-        Self {
+        Ok(Self {
             bus: Bus::new(serial, motors),
-        }
+        })
     }
 
     /// Open the port and hear every motor answer: what a lost bus must do to
@@ -241,35 +240,13 @@ impl SerialBus {
     /// # Errors
     /// The port cannot be opened.
     pub fn open(path: &str, motor_ids: &[u8]) -> anyhow::Result<Self> {
-        Ok(Self::with_port(
-            path,
-            motor_ids,
-            Port::open(path, motor_ids)?,
-        ))
-    }
-
-    pub(crate) fn open_with_raw(
-        path: &str,
-        motor_ids: &[u8],
-    ) -> anyhow::Result<(Self, Box<dyn serialport::SerialPort>)> {
-        let serial = open_serial(path, TIMEOUT)?;
-        let raw = serial
-            .try_clone()
-            .context("Cannot share the open Feetech port for parameter restore")?;
-        Ok((
-            Self::with_port(path, motor_ids, Port::from_serial(serial, motor_ids)),
-            raw,
-        ))
-    }
-
-    fn with_port(path: &str, motor_ids: &[u8], port: Port) -> Self {
-        Self {
+        Ok(Self {
             path: path.to_owned(),
             motor_ids: motor_ids.to_vec(),
-            port: Some(port),
+            port: Some(Port::open(path, motor_ids)?),
             attempt: None,
             timing: BusTiming::new(),
-        }
+        })
     }
 
     #[must_use]
@@ -281,6 +258,20 @@ impl SerialBus {
         self.port
             .as_mut()
             .with_context(|| format!("The Feetech bus {} is disconnected", self.path))
+    }
+
+    pub(crate) fn set_timeout(&mut self, timeout: Duration) -> anyhow::Result<()> {
+        self.port()?
+            .bus
+            .set_timeout(timeout)
+            .map_err(|error| anyhow!("Setting Feetech bus timeout: {error}"))
+    }
+
+    pub(crate) fn reset_parameters_keep_id(&mut self, id: u8) -> anyhow::Result<()> {
+        self.port()?
+            .bus
+            .reset_parameters_keep_id(id)
+            .map_err(|error| anyhow!("Motor {id}, restoring parameters: {error}"))
     }
 
     pub(crate) fn write_acknowledged(
