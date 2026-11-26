@@ -510,19 +510,10 @@ impl Client {
     }
 }
 
-pub fn default_setup_directory() -> Result<PathBuf> {
-    if let Some(directory) =
-        std::env::var_os("SO101_SETUP_DIRECTORY").filter(|value| !value.is_empty())
-    {
-        return Ok(PathBuf::from(directory));
-    }
-    let directories =
-        BaseDirs::new().context("Could not locate the current user's config directory")?;
-    Ok(directories.config_dir().join("so101-setup"))
-}
-
 pub fn resolve_directory(path: Option<&Path>) -> Result<PathBuf> {
-    path.map_or_else(default_setup_directory, |path| Ok(path.to_path_buf()))
+    path.map_or_else(hebbian_so101::setup::default_arm_config_directory, |path| {
+        Ok(path.to_path_buf())
+    })
 }
 
 #[cfg(test)]

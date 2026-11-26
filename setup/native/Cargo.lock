@@ -796,6 +796,7 @@ name = "hebbian-so101"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "directories-next",
  "hdrhistogram",
  "rustypot",
  "serde",

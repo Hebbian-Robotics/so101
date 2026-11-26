@@ -15,6 +15,7 @@ schema = ["dep:schemars"]
 
 [dependencies]
 anyhow = "1.0.104"
+directories-next = "2"
 hdrhistogram = { version = "7.6.0", default-features = false }
 rustypot = "1.15.0"
 schemars = { version = "1", optional = true }

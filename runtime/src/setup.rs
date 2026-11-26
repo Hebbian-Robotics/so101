@@ -287,6 +287,18 @@ impl MotorIds {
     }
 }
 
+/// Resolve the shared SO-101 arm configuration directory.
+pub fn default_arm_config_directory() -> anyhow::Result<std::path::PathBuf> {
+    if let Some(directory) =
+        std::env::var_os("SO101_SETUP_DIRECTORY").filter(|value| !value.is_empty())
+    {
+        return Ok(directory.into());
+    }
+    let directories = directories_next::BaseDirs::new()
+        .ok_or_else(|| anyhow::anyhow!("Could not locate the current user's config directory"))?;
+    Ok(directories.config_dir().join("so101-setup"))
+}
+
 #[cfg(test)]
 mod tests {
     use std::path::Path;
