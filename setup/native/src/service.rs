@@ -20,7 +20,10 @@ use serde_json::{Value, json};
 use tokio::sync::watch;
 use tokio_stream::{StreamExt, wrappers::WatchStream};
 
-use crate::app::{Action, Application, ProgramMotor, follower_motors, programming_ports};
+use crate::app::{
+    Action, Application, ProgramMotor, calibration_error_message, follower_motors,
+    programming_ports,
+};
 
 include!(concat!(env!("OUT_DIR"), "/assets.rs"));
 
@@ -377,7 +380,9 @@ async fn perform<T: Serialize + Send + 'static>(
     })
     .await
     .map_err(bad_request)?;
-    result.map(Json).map_err(bad_request)
+    result
+        .map(Json)
+        .map_err(|error| bad_request(calibration_error_message(&error)))
 }
 
 fn bad_request(error: impl std::fmt::Display) -> HttpError {

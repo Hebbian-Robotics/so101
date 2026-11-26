@@ -14,6 +14,16 @@ use hebbian_so101::telemetry::CommunicationFailure;
 use serde::{Deserialize, Serialize};
 use serialport::SerialPortType;
 
+pub(crate) fn calibration_error_message(error: &anyhow::Error) -> String {
+    let mut message = format!("{error:#}");
+    if error.downcast_ref::<CommunicationFailure>().is_some() {
+        message.push_str(
+            ". Check that the servo board is connected to the servo chain and the servos have power.",
+        );
+    }
+    message
+}
+
 #[derive(Deserialize, Serialize)]
 #[serde(tag = "action", rename_all = "snake_case", deny_unknown_fields)]
 pub enum Action {
@@ -203,7 +213,7 @@ impl Application {
             return;
         }
         if let Err(error) = self.poll_arm() {
-            self.notice = format!("{error:#}");
+            self.notice = calibration_error_message(&error);
             self.retry_at = Some(Instant::now() + Duration::from_secs(1));
         }
     }
