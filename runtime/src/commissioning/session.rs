@@ -87,7 +87,7 @@ enum State {
         draft: Draft,
         source: ReviewSource,
     },
-    Saved(SavedFiles),
+    Saved(SavedFiles, Vec<JointReading>, f64),
     Failed(String),
 }
 
@@ -257,7 +257,7 @@ impl<Bus: SetupBus> Session<Bus> {
 
     pub fn restart(&mut self) -> Result<()> {
         match &self.state {
-            State::Saved(_) | State::Failed(_) => bail!("Reconnect before creating a new draft"),
+            State::Saved(..) | State::Failed(_) => bail!("Reconnect before creating a new draft"),
             State::Sweep {
                 recalibration: Some(_),
                 ..
@@ -449,6 +449,7 @@ impl<Bus: SetupBus> Session<Bus> {
 
     pub fn save(&mut self) -> Result<()> {
         self.files.require_completed_reset()?;
+        let last_view = self.view();
         let State::Review { draft, source } = &self.state else {
             bail!("Review the calibration before saving");
         };
@@ -470,7 +471,7 @@ impl<Bus: SetupBus> Session<Bus> {
         let mut bus = self.bus.take().context("Reconnect the arm")?;
         match self.files.save(&mut bus, &self.setup, draft, target) {
             Ok(saved) => {
-                self.state = State::Saved(saved);
+                self.state = State::Saved(saved, last_view.joints, last_view.gripper_opening);
                 Ok(())
             }
             Err(error) => {
@@ -485,7 +486,7 @@ impl<Bus: SetupBus> Session<Bus> {
             State::Reference { .. } => Stage::Reference,
             State::Sweep { .. } => Stage::Sweep,
             State::Review { .. } => Stage::Review,
-            State::Saved(_) => Stage::Saved,
+            State::Saved(..) => Stage::Saved,
             State::Failed(_) => Stage::Error,
         }
     }
@@ -496,7 +497,9 @@ impl<Bus: SetupBus> Session<Bus> {
             ..SessionView::default()
         };
         match &self.state {
-            State::Saved(saved) => {
+            State::Saved(saved, joints, gripper_opening) => {
+                view.joints.clone_from(joints);
+                view.gripper_opening = *gripper_opening;
                 view.message = format!("Saved. Backups: {}", saved.backup.display());
                 view.configuration_path = saved.configuration.display().to_string();
                 view.calibration_path = saved.calibration.display().to_string();
