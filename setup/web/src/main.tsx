@@ -302,7 +302,7 @@ function App() {
           <div className="flex min-w-0 items-center gap-2 text-sm">
             <img src={hebbianLogo} alt="" className="size-8 shrink-0" />
             <span>
-              Hebbian <strong>Robot Use</strong>
+              Hebbian <strong>SO-101</strong>
             </span>
           </div>
         </SidebarHeader>
