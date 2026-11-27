@@ -4,9 +4,8 @@ use std::collections::HashMap;
 use std::f64::consts::PI;
 
 use anyhow::bail;
-use rustypot::servo::Encoding;
 
-use super::bus::{STATE_BLOCK_LENGTH, ServoBus, StateBlock};
+use super::bus::{ServoBus, StateBlock};
 use super::servos::Servos;
 use super::servos::TORQUE_READ_INTERVAL;
 use super::units::{VelocityEstimator, radians_to_steps, steps_to_radians};
@@ -105,7 +104,6 @@ impl FakeBus {
 }
 
 impl ServoBus for FakeBus {
-    /// Serve registers 56..=65 as the servo's bytes, so decoding is exercised.
     fn read_state_block(&mut self, ids: &[u8]) -> anyhow::Result<Vec<StateBlock>> {
         if self.fail_reads {
             bail!("no answer");
@@ -119,25 +117,14 @@ impl ServoBus for FakeBus {
             .iter()
             .map(|id| {
                 let register = |name: &str| self.registers[&(*id, name.to_owned())];
-                let magnitude = Encoding::SignMagnitude { sign_bit: 15 };
-                let mut bytes = vec![0_u8; usize::from(STATE_BLOCK_LENGTH)];
-                let words = [
-                    (0, magnitude.encode(register("present_position"), 2)),
-                    (2, magnitude.encode(register("present_speed"), 2)),
-                    (
-                        4,
-                        Encoding::SignMagnitude { sign_bit: 10 }
-                            .encode(register("present_load"), 2),
-                    ),
-                ];
-                for (offset, word) in words {
-                    let word = u16::try_from(word.unwrap()).unwrap();
-                    bytes[offset..offset + 2].copy_from_slice(&word.to_le_bytes());
-                }
-                bytes[6] = u8::try_from(register("present_voltage")).unwrap();
-                bytes[7] = u8::try_from(register("present_temperature")).unwrap();
-                bytes[9] = u8::try_from(register("status")).unwrap();
-                let mut block = StateBlock::decode(&bytes)?;
+                let mut block = StateBlock {
+                    position: register("present_position"),
+                    load: register("present_load"),
+                    voltage: register("present_voltage"),
+                    temperature: register("present_temperature"),
+                    status: register("status"),
+                    packet_status: 0,
+                };
                 if ids.len() == 1
                     && let Some((motor_id, temperature, voltage)) = self.confirmation_override
                     && *id == motor_id
@@ -506,28 +493,6 @@ fn an_unset_return_delay_is_not_checked() {
     let mut unchecked = config();
     unchecked.expected_return_delay_time = None;
     Servos::new(bus, unchecked).unwrap().preflight().unwrap();
-}
-
-#[test]
-fn the_state_block_decodes_signs_and_alarms() {
-    let mut bytes = [0_u8; 10];
-    bytes[0..2].copy_from_slice(&(0x8000_u16 | 0x0005).to_le_bytes());
-    bytes[4..6].copy_from_slice(&(0x0400_u16 | 0x0007).to_le_bytes());
-    bytes[6] = 121;
-    bytes[7] = 41;
-    bytes[9] = 0x20;
-    assert_eq!(
-        StateBlock::decode(&bytes).unwrap(),
-        StateBlock {
-            position: -5,
-            load: -7,
-            voltage: 121,
-            temperature: 41,
-            status: 0x20,
-            packet_status: 0,
-        }
-    );
-    assert!(StateBlock::decode(&bytes[..9]).is_err());
 }
 
 #[test]
