@@ -7,8 +7,7 @@ use std::time::{Duration, Instant};
 use anyhow::{Context, anyhow, bail, ensure};
 use hdrhistogram::Histogram;
 use rustypot::bus::Bus;
-use rustypot::servo::feetech::sts3215::{DEFINITION, REGISTERS};
-use rustypot::servo::{Encoding, RegisterInfo};
+use rustypot::servo::feetech::sts3215::DEFINITION;
 
 use crate::telemetry::Reconnection;
 
@@ -48,56 +47,15 @@ pub trait ServoBus {
     fn reconnect(&mut self) -> Reconnection;
 }
 
-/// Whether two register names are equal; `==` on strings is not usable in a
-/// `const`.
-const fn same_name(first: &str, second: &str) -> bool {
-    let (first, second) = (first.as_bytes(), second.as_bytes());
-    if first.len() != second.len() {
-        return false;
-    }
-    let mut index = 0;
-    while index < first.len() {
-        if first[index] != second[index] {
-            return false;
-        }
-        index += 1;
-    }
-    true
-}
-
-/// A register of the STS3215's control table, looked up while compiling, so the
-/// state block below cannot disagree with the table.
-#[allow(
-    clippy::panic,
-    reason = "Only constant register names call this function; invalid names fail compilation"
-)]
-const fn register(name: &str) -> RegisterInfo {
-    let mut index = 0;
-    while index < REGISTERS.len() {
-        if same_name(REGISTERS[index].name, name) {
-            return REGISTERS[index];
-        }
-        index += 1;
-    }
-    panic!("the STS3215 table has no such register")
-}
-
-/// First register of the contiguous live block: `Present_Position`.
-pub(super) const STATE_BLOCK_ADDRESS: u8 = register("present_position").addr;
-/// From `Present_Position` through `Status` inclusive: position, speed (not
-/// decoded: the loop estimates velocity from positions), load, voltage,
-/// temperature, the asynchronous-write flag, and status. Rustypot's named
-/// block read requires every byte to have a register name, and its STS3215
-/// table has no entry for the flag at address 64.
-pub(super) const STATE_BLOCK_LENGTH: u8 = {
-    let status = register("status");
-    status.addr + status.size - STATE_BLOCK_ADDRESS
-};
-
-/// Where a register's bytes start within the state block.
-const fn block_offset(name: &str) -> usize {
-    (register(name).addr - STATE_BLOCK_ADDRESS) as usize
-}
+const STATE_REGISTERS: [&str; 7] = [
+    "present_position",
+    "present_speed",
+    "present_load",
+    "present_voltage",
+    "present_temperature",
+    "async_write_flag",
+    "status",
+];
 
 /// One motor's live registers, decoded as the servo reports them.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -114,29 +72,6 @@ pub struct StateBlock {
     pub status: i64,
     /// Error bits returned in the protocol status packet.
     pub packet_status: u8,
-}
-
-impl StateBlock {
-    /// Decode registers 56..=65, whose layout is in the STS3215 table.
-    pub(super) fn decode(bytes: &[u8]) -> anyhow::Result<Self> {
-        ensure!(
-            bytes.len() == usize::from(STATE_BLOCK_LENGTH),
-            "A state block has {} bytes, expected {STATE_BLOCK_LENGTH}",
-            bytes.len()
-        );
-        let word =
-            |offset: usize| u64::from(u16::from_le_bytes([bytes[offset], bytes[offset + 1]]));
-        Ok(Self {
-            position: Encoding::SignMagnitude { sign_bit: 15 }
-                .decode(word(block_offset("present_position")), 2),
-            load: Encoding::SignMagnitude { sign_bit: 10 }
-                .decode(word(block_offset("present_load")), 2),
-            voltage: i64::from(bytes[block_offset("present_voltage")]),
-            temperature: i64::from(bytes[block_offset("present_temperature")]),
-            status: i64::from(bytes[block_offset("status")]),
-            packet_status: 0,
-        })
-    }
 }
 
 /// How the bus has answered so far: what decides how short `TIMEOUT` can be.
@@ -325,14 +260,22 @@ impl ServoBus for SerialBus {
         };
         let replies =
             Self::timed_request(bus, &mut self.timing, READ_RETRIES, "state block", |bus| {
-                bus.sync_read_raw_with_error(ids, STATE_BLOCK_ADDRESS, STATE_BLOCK_LENGTH)
+                bus.sync_read_block_with_error(ids, &STATE_REGISTERS)
             })?;
         replies
             .iter()
-            .map(|(bytes, packet_status)| {
-                let mut block = StateBlock::decode(bytes)?;
-                block.packet_status = packet_status.byte();
-                Ok(block)
+            .map(|(values, packet_status)| {
+                let [position, _, load, voltage, temperature, _, status] = values.as_slice() else {
+                    bail!("Unexpected state register count: {}", values.len());
+                };
+                Ok(StateBlock {
+                    position: *position,
+                    load: *load,
+                    voltage: *voltage,
+                    temperature: *temperature,
+                    status: *status,
+                    packet_status: packet_status.byte(),
+                })
             })
             .collect()
     }
